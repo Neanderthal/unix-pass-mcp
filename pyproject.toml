@@ -1,0 +1,44 @@
+[project]
+name = "unix-pass-mcp"
+version = "0.1.0"
+description = "MCP server for the Unix `pass` password manager"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+dependencies = [
+    "mcp>=1.21.0",
+]
+
+[project.scripts]
+unix-pass-mcp = "unix_pass_mcp.server:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/unix_pass_mcp"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "RUF"]
+ignore = ["S603"]  # subprocess call: we always use list args, never shell=True
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106"]
+# Integration tests intentionally invoke `gpg`/`pass` by short name (PATH lookup).
+"tests/integration/*" = ["S101", "S105", "S106", "S607"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

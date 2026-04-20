@@ -1,0 +1,480 @@
+"""FastMCP server entry point for unix-pass-mcp.
+
+Tool surface defined in `.claude/rules/architecture.md` §3. M1 ships every
+read-only tool. Write/destructive tools land in M2/M3.
+
+Convention for handlers:
+    1. validate inputs (security.validate_pass_name / validate_subfolder)
+    2. enforce path allowlist (security.assert_path_allowed)
+    3. enforce capability gate if mutating (require_writes / require_destructive)
+    4. call pass_cli.run_or_raise (or read FS via store)
+    5. audit.log on success and error
+    6. return structured dict
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import asdict
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+
+from . import agent, audit, fields, pass_cli, security, store
+from .errors import AgentUnavailable, AlreadyExists, NotFound, PassError
+
+mcp = FastMCP(
+    name="unix-pass-mcp",
+    instructions=(
+        "Read/write access to the Unix `pass` password manager. "
+        "Write tools refuse unless PASS_MCP_ALLOW_WRITES=1; destructive tools "
+        "additionally require PASS_MCP_ALLOW_DESTRUCTIVE=1. Call `store_info` "
+        "first to confirm the store is reachable and gpg-agent is running."
+    ),
+)
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _require_agent_if_configured() -> None:
+    """gpg-agent preflight. Skipped if PASS_MCP_REQUIRE_AGENT=0."""
+    if os.environ.get("PASS_MCP_REQUIRE_AGENT", "1").strip() in {"0", "false", "no", "off"}:
+        return
+    if not pass_cli.gpg_agent_available():
+        raise AgentUnavailable(
+            "gpg-agent is not running; start it (e.g. `gpg-connect-agent /bye`) "
+            "or set PASS_MCP_REQUIRE_AGENT=0 to disable this check"
+        )
+
+
+def _decrypt(name: str) -> fields.ParsedEntry:
+    """Validate name, decrypt via `pass show`, return parsed entry.
+
+    Raises PassError on any failure; caller is responsible for audit logging.
+    """
+    security.validate_pass_name(name)
+    security.assert_path_allowed(name)
+    _require_agent_if_configured()
+    result = pass_cli.run_or_raise(["show", name])
+    return fields.parse(result.stdout)
+
+
+# ── tools ────────────────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="store_info",
+    description=(
+        "Inspect the configured password store without decrypting anything. "
+        "Returns store path, recipient keys per subdirectory (from .gpg-id files), "
+        "git/agent/signing status, and any configuration warnings. "
+        "Call this first to confirm the store is reachable and healthy."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+)
+def store_info() -> dict[str, Any]:
+    info = store.collect()
+    return asdict(info)
+
+
+@mcp.tool(
+    name="list",
+    description=(
+        "List all pass-names (entries) in the store, optionally scoped to a subfolder. "
+        "Returns a flat sorted list of names without the .gpg suffix. Does not decrypt."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+)
+def list_entries(subfolder: str | None = None) -> dict[str, Any]:
+    sub = security.validate_subfolder(subfolder)
+    names = store.list_names(sub)
+    audit.log("list", name=sub, count=len(names))
+    return {"names": names, "count": len(names), "subfolder": sub}
+
+
+@mcp.tool(
+    name="find",
+    description=(
+        "Find pass-names whose leaf name contains `query` (case-insensitive substring). "
+        "Mirrors `pass find`. Does not decrypt."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+)
+def find_entries(query: str, subfolder: str | None = None) -> dict[str, Any]:
+    if not isinstance(query, str) or not query:
+        return {"names": [], "count": 0, "query": query}
+    sub = security.validate_subfolder(subfolder)
+    names = store.find_names(query, sub)
+    audit.log("find", name=sub, query=query, count=len(names))
+    return {"names": names, "count": len(names), "query": query, "subfolder": sub}
+
+
+@mcp.tool(
+    name="show",
+    description=(
+        "Decrypt and return the password (line 1) for a pass-name. "
+        "Pass `line` to return a different line (1-indexed). The returned `value` is "
+        "sensitive; clients should not log or cache it."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+    meta={"sensitive": True},
+)
+def show(name: str, line: int = 1) -> dict[str, Any]:
+    if not isinstance(line, int) or line < 1:
+        raise PassError("`line` must be a positive integer", code="invalid_argument")
+    try:
+        entry = _decrypt(name)
+        all_lines = [entry.password, *entry.lines]
+        if line > len(all_lines):
+            raise NotFound(f"entry has only {len(all_lines)} line(s)")
+        audit.log("show", name=name, line=line)
+        return {"value": all_lines[line - 1], "line": line, "sensitive": True}
+    except PassError as exc:
+        audit.log("show", name=name, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="show_field",
+    description=(
+        "Decrypt the entry and return one named metadata field "
+        "(e.g. `URL`, `Username`, `otpauth`). Field lookup is case-insensitive. "
+        "Returns null `value` if the field is absent. The password line is never returned."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+    meta={"sensitive": True},
+)
+def show_field(name: str, field: str) -> dict[str, Any]:
+    if not isinstance(field, str) or not field:
+        raise PassError("`field` must be a non-empty string", code="invalid_argument")
+    try:
+        entry = _decrypt(name)
+        value = entry.get_field(field)
+        audit.log("show_field", name=name, field=field, present=value is not None)
+        return {"field": field, "value": value, "present": value is not None, "sensitive": True}
+    except PassError as exc:
+        audit.log("show_field", name=name, field=field, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="unlock_agent",
+    description=(
+        "Warm gpg-agent's secret-key cache by popping a desktop password dialog "
+        "(zenity / kdialog) and decrypting one entry via loopback pinentry. After "
+        "this succeeds, subsequent `show` calls work without TTY-bound pinentry "
+        "until the agent's cache TTL expires (default 600s, set via `default-cache-ttl` "
+        "in ~/.gnupg/gpg-agent.conf). Use this when `store_info` reports "
+        "pinentry-curses + no controlling TTY. The passphrase travels: "
+        "desktop dialog → our process → gpg stdin. The LLM never sees it."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+)
+def unlock_agent() -> dict[str, object]:
+    agent.require_agent_running()
+    info = store.collect()
+    has_display = info.pinentry is not None and info.pinentry.has_display
+    try:
+        result = agent.unlock(has_display=has_display)
+    except PassError as exc:
+        audit.log("unlock_agent", ok=False, error=exc.code)
+        raise
+    audit.log("unlock_agent", ok=bool(result.get("ok")))
+    return result
+
+
+@mcp.tool(
+    name="show_metadata",
+    description=(
+        "Decrypt the entry but return only its non-sensitive shape: which metadata "
+        "fields exist (with their values), whether a password is present, and the "
+        "raw line count. Useful to inspect entry structure without surfacing the password."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+)
+def show_metadata(name: str) -> dict[str, Any]:
+    try:
+        entry = _decrypt(name)
+        view = fields.metadata_view(entry)
+        audit.log("show_metadata", name=name)
+        return {"name": name, **view}
+    except PassError as exc:
+        audit.log("show_metadata", name=name, ok=False, error=exc.code)
+        raise
+
+
+# ── write tools (gated by PASS_MCP_ALLOW_WRITES=1) ──────────────────────────
+
+
+_MAX_BODY_BYTES = 64 * 1024  # 64 KiB; pass entries larger than this are pathological
+
+
+def _validate_body(body: str, *, allow_newlines: bool) -> None:
+    if not isinstance(body, str):
+        raise PassError("body must be a string", code="invalid_argument")
+    if "\x00" in body:
+        raise PassError("body contains NUL byte", code="invalid_argument")
+    if not allow_newlines and ("\n" in body or "\r" in body):
+        raise PassError(
+            "single-line value must not contain newlines; use insert_multiline instead",
+            code="invalid_argument",
+        )
+    if len(body.encode("utf-8")) > _MAX_BODY_BYTES:
+        raise PassError(
+            f"body exceeds {_MAX_BODY_BYTES} bytes",
+            code="invalid_argument",
+        )
+
+
+def _insert_via_stdin(name: str, body: str, *, multiline: bool, force: bool) -> None:
+    """Centralized writer. Always uses --echo (no double prompt) or --multiline.
+
+    Pre-checks for existence when force=False so we never trigger pass's
+    interactive overwrite prompt on a TTY-less server.
+    """
+    if not force and store.entry_exists(name):
+        raise AlreadyExists(f"{name} already exists; pass force=true to overwrite")
+    args = ["insert"]
+    if multiline:
+        args.append("--multiline")
+    else:
+        args.append("--echo")
+    if force:
+        args.append("--force")
+    args.append(name)
+    # `pass insert --echo` reads exactly one line from stdin; we send the
+    # password followed by a single newline. `--multiline` reads until EOF.
+    stdin = body if multiline else (body + "\n")
+    pass_cli.run_or_raise(args, stdin=stdin)
+
+
+@mcp.tool(
+    name="insert",
+    description=(
+        "Create or overwrite a single-line entry. The password is passed via stdin "
+        "(never argv) so it never appears in /proc/<pid>/cmdline. Refuses if the "
+        "entry exists unless `force=true`. Requires PASS_MCP_ALLOW_WRITES=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+def insert(name: str, password: str, force: bool = False) -> dict[str, Any]:
+    security.require_writes()
+    security.validate_pass_name(name)
+    security.assert_path_allowed(name)
+    _validate_body(password, allow_newlines=False)
+    try:
+        _insert_via_stdin(name, password, multiline=False, force=force)
+        audit.log("insert", name=name, force=force)
+        return {"name": name, "ok": True}
+    except PassError as exc:
+        audit.log("insert", name=name, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="insert_multiline",
+    description=(
+        "Create or overwrite a multi-line entry. Line 1 is the password; subsequent "
+        "lines should follow `Key: value` convention (URL, Username, otpauth, …). "
+        "Body is passed via stdin. Refuses if the entry exists unless `force=true`. "
+        "Requires PASS_MCP_ALLOW_WRITES=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+def insert_multiline(name: str, body: str, force: bool = False) -> dict[str, Any]:
+    security.require_writes()
+    security.validate_pass_name(name)
+    security.assert_path_allowed(name)
+    _validate_body(body, allow_newlines=True)
+    if not body.endswith("\n"):
+        body = body + "\n"
+    try:
+        _insert_via_stdin(name, body, multiline=True, force=force)
+        audit.log("insert_multiline", name=name, force=force, bytes=len(body))
+        return {"name": name, "ok": True, "bytes": len(body)}
+    except PassError as exc:
+        audit.log("insert_multiline", name=name, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="set_field",
+    description=(
+        "Set or update one `Key: value` metadata field on an existing entry, "
+        "preserving the password and all other lines. Field lookup is case-insensitive; "
+        "existing case is preserved on update, new fields are appended in the requested "
+        "case. Refuses if the entry does not exist (use `insert_multiline` to create). "
+        "Requires PASS_MCP_ALLOW_WRITES=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+)
+def set_field(name: str, field: str, value: str) -> dict[str, Any]:
+    security.require_writes()
+    if not isinstance(field, str) or not field:
+        raise PassError("`field` must be a non-empty string", code="invalid_argument")
+    _validate_body(value, allow_newlines=False)
+    try:
+        entry = _decrypt(name)  # also validates name + path
+        entry.set_field(field, value)
+        body = fields.serialize(entry)
+        _insert_via_stdin(name, body, multiline=True, force=True)
+        audit.log("set_field", name=name, field=field)
+        return {"name": name, "field": field, "ok": True, "fields_count": len(entry.fields)}
+    except ValueError as exc:
+        audit.log("set_field", name=name, field=field, ok=False, error="invalid_argument")
+        raise PassError(str(exc), code="invalid_argument") from exc
+    except PassError as exc:
+        audit.log("set_field", name=name, field=field, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="unset_field",
+    description=(
+        "Remove all lines matching `field` (case-insensitive) from an existing entry, "
+        "preserving the password and all other lines. No-op if the field is absent. "
+        "Requires PASS_MCP_ALLOW_WRITES=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+)
+def unset_field(name: str, field: str) -> dict[str, Any]:
+    security.require_writes()
+    if not isinstance(field, str) or not field:
+        raise PassError("`field` must be a non-empty string", code="invalid_argument")
+    try:
+        entry = _decrypt(name)
+        removed = entry.unset_field(field)
+        if not removed:
+            audit.log("unset_field", name=name, field=field, removed=False)
+            return {"name": name, "field": field, "removed": False}
+        body = fields.serialize(entry)
+        _insert_via_stdin(name, body, multiline=True, force=True)
+        audit.log("unset_field", name=name, field=field, removed=True)
+        return {"name": name, "field": field, "removed": True}
+    except PassError as exc:
+        audit.log("unset_field", name=name, field=field, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="generate",
+    description=(
+        "Generate a new password for `name`. `length` defaults to PASSWORD_STORE_GENERATED_LENGTH "
+        "(or 25). `no_symbols=true` restricts to alphanumerics. `in_place=true` replaces only "
+        "the first line of an existing entry (preserving metadata) and needs the entry to exist. "
+        "`force=true` overwrites any existing entry from scratch. Without either flag, refuses if "
+        "the entry already exists. Returns the generated password (sensitive). "
+        "Requires PASS_MCP_ALLOW_WRITES=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+    meta={"sensitive": True},
+)
+def generate(
+    name: str,
+    length: int = 25,
+    no_symbols: bool = False,
+    in_place: bool = False,
+    force: bool = False,
+) -> dict[str, Any]:
+    security.require_writes()
+    security.validate_pass_name(name)
+    security.assert_path_allowed(name)
+    if not isinstance(length, int) or length < 1 or length > 1024:
+        raise PassError("`length` must be an integer between 1 and 1024", code="invalid_argument")
+    if in_place and force:
+        raise PassError("`in_place` and `force` are mutually exclusive", code="invalid_argument")
+
+    exists = store.entry_exists(name)
+    if in_place and not exists:
+        raise NotFound(f"{name} does not exist; cannot use in_place=true on a missing entry")
+    if not in_place and not force and exists:
+        raise AlreadyExists(f"{name} already exists; pass force=true or in_place=true")
+
+    args = ["generate"]
+    if no_symbols:
+        args.append("--no-symbols")
+    if in_place:
+        args.append("--in-place")
+    elif force:
+        args.append("--force")
+    args.append(name)
+    args.append(str(length))
+
+    try:
+        pass_cli.run_or_raise(args)
+        # Re-decrypt to retrieve the value rather than parsing pass's stdout
+        # (which is locale/colorization-sensitive).
+        entry = _decrypt(name)
+        audit.log("generate", name=name, length=length, no_symbols=no_symbols, in_place=in_place)
+        return {
+            "name": name,
+            "value": entry.password,
+            "length": len(entry.password),
+            "no_symbols": no_symbols,
+            "in_place": in_place,
+            "sensitive": True,
+        }
+    except PassError as exc:
+        audit.log("generate", name=name, ok=False, error=exc.code)
+        raise
+
+
+def _move_or_copy(action: str, src: str, dst: str, *, force: bool) -> dict[str, Any]:
+    security.require_writes()
+    security.validate_pass_name(src)
+    security.validate_pass_name(dst)
+    security.assert_path_allowed(src)
+    security.assert_path_allowed(dst)
+    if not store.entry_exists(src) and not store.directory_exists(src):
+        raise NotFound(f"{src} does not exist")
+    # Pre-check: pass mv/cp prompts on overwrite without --force; that would
+    # hang us. Refuse cleanly if the destination is taken and force=False.
+    if not force and (store.entry_exists(dst) or store.directory_exists(dst)):
+        raise AlreadyExists(f"{dst} already exists; pass force=true to overwrite")
+    args = [action]
+    if force:
+        args.append("--force")
+    args.extend([src, dst])
+    try:
+        pass_cli.run_or_raise(args)
+        audit.log(action, name=src, dst=dst, force=force)
+        return {"src": src, "dst": dst, "ok": True}
+    except PassError as exc:
+        audit.log(action, name=src, dst=dst, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="mv",
+    description=(
+        "Rename or move an entry/subfolder. Re-encrypts to the destination subfolder's "
+        "recipients if they differ. Refuses if the destination exists unless `force=true`. "
+        "Requires PASS_MCP_ALLOW_WRITES=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False),
+)
+def mv(src: str, dst: str, force: bool = False) -> dict[str, Any]:
+    return _move_or_copy("mv", src, dst, force=force)
+
+
+@mcp.tool(
+    name="cp",
+    description=(
+        "Copy an entry/subfolder. Re-encrypts to the destination subfolder's recipients "
+        "if they differ. Refuses if the destination exists unless `force=true`. "
+        "Requires PASS_MCP_ALLOW_WRITES=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+def cp(src: str, dst: str, force: bool = False) -> dict[str, Any]:
+    return _move_or_copy("cp", src, dst, force=force)
+
+
+def main() -> None:
+    mcp.run("stdio")
+
+
+if __name__ == "__main__":
+    main()

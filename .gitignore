@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.uv/
+.ruff_cache/
+.pytest_cache/
+dist/
+build/
+.coverage
+.coverage.*
+htmlcov/
+.envrc
+.claude/settings.local.json

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install pass + gpg (for runtime probe tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pass gnupg
+
+      - name: Sync deps
+        run: uv sync --extra dev
+
+      - name: Lint
+        run: |
+          uv run ruff check
+          uv run ruff format --check
+
+      - name: Unit tests
+        run: uv run pytest -q tests/unit
+
+      - name: Integration tests (real gpg + pass)
+        env:
+          PASS_MCP_INTEGRATION: "1"
+        run: uv run pytest -q tests/integration
