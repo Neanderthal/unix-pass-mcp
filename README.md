@@ -193,6 +193,29 @@ PASS_MCP_INTEGRATION=1 uv run pytest -q tests/integration  # 7 real-GPG tests
 
 The integration suite mints a throwaway RSA key in an ephemeral `GNUPGHOME` (1-day expiry, no passphrase) and exercises real `pass`. CI runs both tiers across Python 3.11/3.12/3.13.
 
+## Disclaimer
+
+`unix-pass-mcp` is a bridge between your password store and a non-deterministic large language model — and, in most realistic deployments, between your password store and every other MCP server that shares the same model session (browser automation, shell execution, web requests). Even with every gate disabled by default, the *purpose* of installing this server is to grant an LLM access to your secrets. The following are not bugs:
+
+- An LLM **can** be prompted (by you, by a hostile webpage your browser MCP loads, by a poisoned tool result) to decrypt any entry within `PASS_MCP_ALLOWED_PATHS` and forward it to another tool in the same session.
+- With `PASS_MCP_ALLOW_WRITES=1`, an LLM can overwrite, rename, or generate-over entries in scope.
+- With `PASS_MCP_ALLOW_DESTRUCTIVE=1`, an LLM can re-encrypt your store to a different recipient set, or remove a subfolder's `.gpg-id`.
+- With `PASS_MCP_ALLOW_NETWORK=1`, an LLM can push commits — including credential changes — to your configured git remote.
+
+The capability gates, path allowlist, audit log, sensitive-output flags, and validation hardening reduce the **blast radius** of mistakes and prompt injection. They do **not** make it safe to point an unsupervised agent at a production credential store. Treat the security posture documented above as best-effort engineering against a hostile and rapidly-evolving threat model, not a formal guarantee.
+
+You are solely responsible for:
+
+- Which capability gates you enable, and on which stores.
+- The trust boundary of the MCP host you run this against — what it logs, caches, ships to telemetry, or lets other servers see.
+- Backing up `~/.password-store` (and `~/.gnupg`) before granting destructive or network access.
+- Reviewing `~/.local/state/unix-pass-mcp/audit.log` periodically.
+- Recovering from any mistake an agent makes — there is no undo.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. THE AUTHORS AND CONTRIBUTORS SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY — INCLUDING BUT NOT LIMITED TO DATA LOSS, CREDENTIAL COMPROMISE, STORE LOCK-OUT, UNINTENDED DISCLOSURE OF SECRETS, OR LOSS OF SERVICE — WHETHER ARISING FROM BUGS, PROMPT INJECTION, MISCONFIGURATION, OR ANY OTHER USE OR MISUSE OF THE SOFTWARE. See the [LICENSE](./LICENSE) for the full MIT terms.
+
+This project is not affiliated with, endorsed by, or sponsored by Anthropic, the maintainers of `pass(1)` (Jason A. Donenfeld and contributors), the GnuPG project, or any MCP host vendor. All trademarks are the property of their respective owners.
+
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
