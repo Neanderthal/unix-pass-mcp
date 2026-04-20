@@ -164,16 +164,19 @@ def show_field(name: str, field: str) -> dict[str, Any]:
 @mcp.tool(
     name="unlock_agent",
     description=(
-        "Warm gpg-agent's secret-key cache by popping a desktop password dialog "
-        "(zenity / kdialog) and decrypting one entry via loopback pinentry. After "
-        "this succeeds, subsequent `show` calls work without TTY-bound pinentry "
-        "until the agent's cache TTL expires (default 600s, set via `default-cache-ttl` "
-        "in ~/.gnupg/gpg-agent.conf). Use this when `store_info` reports "
-        "pinentry-curses + no controlling TTY. The passphrase travels: "
-        "desktop dialog → our process → gpg stdin. The LLM never sees it. "
-        "Optional `target` is a pass-name to decrypt against — useful when the "
-        "store has multiple `.gpg-id` recipients and you want to warm a "
-        "specific key. If omitted, the smallest in-scope entry is used."
+        "**Call this whenever any other tool returns `agent_unavailable`** — that "
+        "error means gpg-agent is up but pinentry can't prompt (typically "
+        "pinentry-curses + no TTY, the default deadlock when an MCP server is "
+        "spawned by Claude Desktop/Code). This tool resolves it: pops a desktop "
+        "password dialog (zenity / kdialog) and decrypts one entry via loopback "
+        "pinentry. After it succeeds, subsequent `show`/`grep`/etc calls work "
+        "without TTY-bound pinentry until the agent's cache TTL expires "
+        "(default 600s, set via `default-cache-ttl` in ~/.gnupg/gpg-agent.conf). "
+        "Do NOT ask the user to paste their GPG passphrase into chat — the "
+        "passphrase travels desktop dialog → our process → gpg stdin and the "
+        "LLM never sees it. Optional `target` is a pass-name to decrypt against "
+        "(useful when the store has multiple `.gpg-id` recipients and you want "
+        "to warm a specific key); without it, the smallest in-scope entry is used."
     ),
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
 )

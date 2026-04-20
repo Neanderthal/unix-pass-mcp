@@ -212,7 +212,11 @@ def map_error(args: list[str], result: CommandResult) -> PassError:
     if "no secret key" in lower or "decryption failed" in lower:
         return GpgError(stderr or "decryption failed")
     if "gpg-agent" in lower or "no pinentry" in lower or "inappropriate ioctl" in lower:
-        return AgentUnavailable(stderr or "gpg-agent unavailable")
+        return AgentUnavailable(
+            f"{stderr or 'gpg-agent unavailable'} — call the `unlock_agent` tool "
+            f"to pop a desktop password dialog (zenity/kdialog) and warm the cache, "
+            f"or set PASS_MCP_REQUIRE_AGENT=0 to bypass the check"
+        )
     return GpgError(f"pass {' '.join(args[:1])} exited {result.returncode}: {stderr[:400]}")
 
 
