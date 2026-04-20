@@ -100,6 +100,37 @@ def test_grep_empty_result(stub_pass: dict[str, Any]) -> None:
     result = server.grep("missing", confirm_decrypt_all=True)
     assert result["count"] == 0
     assert result["matches"] == []
+    assert result["redacted_entries"] == 0
+
+
+def test_grep_drops_matches_outside_allowlist(
+    stub_pass: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without this filter, grep is a path-allowlist escape: pass-grep walks the
+    whole store regardless of PASS_MCP_ALLOWED_PATHS, and decrypted lines from
+    out-of-scope entries leak back to the agent.
+    """
+    monkeypatch.setenv("PASS_MCP_ALLOWED_PATHS", "web/*")
+    stub_pass["responses"][("grep", "alice")] = (
+        "web/github.com:\n"
+        "Username: alice\n"
+        "personal/banking/chase:\n"
+        "Username: alice\n"
+        "Note: alice was here\n"
+    )
+    result = server.grep("alice", confirm_decrypt_all=True)
+    assert [m["name"] for m in result["matches"]] == ["web/github.com"]
+    assert result["count"] == 1
+    assert result["redacted_entries"] == 1
+    # The decrypted out-of-scope line must not appear anywhere in the result.
+    assert "banking" not in str(result)
+
+
+def test_grep_no_filter_when_allowlist_unset(stub_pass: dict[str, Any]) -> None:
+    stub_pass["responses"][("grep", "x")] = "personal/banking:\nx\n"
+    result = server.grep("x", confirm_decrypt_all=True)
+    assert result["count"] == 1
+    assert result["redacted_entries"] == 0
 
 
 # ── simulate on set_field ────────────────────────────────────────────────────

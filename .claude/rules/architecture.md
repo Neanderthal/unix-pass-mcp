@@ -125,9 +125,11 @@ Password value never leaves `fields.py` memory; `audit.py` receives only the fie
 
 ### Passed through to `pass`
 
-`PASSWORD_STORE_DIR`, `PASSWORD_STORE_KEY`, `PASSWORD_STORE_GPG_OPTS`, `PASSWORD_STORE_UMASK` (default 077; never overridden), `PASSWORD_STORE_GENERATED_LENGTH`, `PASSWORD_STORE_CHARACTER_SET`, `PASSWORD_STORE_CHARACTER_SET_NO_SYMBOLS`, `PASSWORD_STORE_SIGNING_KEY`, `PASSWORD_STORE_ENABLE_EXTENSIONS`, `PASSWORD_STORE_EXTENSIONS_DIR`.
+`PASSWORD_STORE_DIR`, `PASSWORD_STORE_KEY`, `PASSWORD_STORE_UMASK` (default 077; never overridden), `PASSWORD_STORE_GENERATED_LENGTH`, `PASSWORD_STORE_CHARACTER_SET`, `PASSWORD_STORE_CHARACTER_SET_NO_SYMBOLS`, `PASSWORD_STORE_SIGNING_KEY`, `PASSWORD_STORE_ENABLE_EXTENSIONS`, `PASSWORD_STORE_EXTENSIONS_DIR`.
 
-Explicitly **not** propagated: `PASSWORD_STORE_X_SELECTION`, `PASSWORD_STORE_CLIP_TIME` (clipboard tools dropped).
+Explicitly **not** propagated:
+- `PASSWORD_STORE_GPG_OPTS` — `pass` splices it into every `gpg` argv unsanitized; a hostile env could inject `--recipient attacker@evil` (silent re-encryption) or `--output /tmp/leak` (decryption exfiltration). Wrap `gpg` with a PATH shim if custom flags are genuinely needed.
+- `PASSWORD_STORE_X_SELECTION`, `PASSWORD_STORE_CLIP_TIME` (clipboard tools dropped).
 
 ---
 

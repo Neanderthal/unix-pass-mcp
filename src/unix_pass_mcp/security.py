@@ -69,15 +69,24 @@ def assert_path_allowed(name: str) -> None:
     Each allowlist entry is an fnmatch glob matched against the full pass-name.
     Prefix matches are supported by using `foo/*`.
     """
-    globs = _allowed_globs()
-    if not globs:
+    if path_allowed(name):
         return
-    for pattern in globs:
-        if fnmatch.fnmatchcase(name, pattern):
-            return
     raise PathNotAllowed(
         f"pass-name {name!r} is outside PASS_MCP_ALLOWED_PATHS",
     )
+
+
+def path_allowed(name: str) -> bool:
+    """Non-raising variant of `assert_path_allowed`. True iff `name` is in scope."""
+    globs = _allowed_globs()
+    if not globs:
+        return True
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in globs)
+
+
+def allowlist_active() -> bool:
+    """True iff PASS_MCP_ALLOWED_PATHS is non-empty (i.e. scoping is in effect)."""
+    return bool(_allowed_globs())
 
 
 def _env_flag(name: str) -> bool:

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from .errors import (
     AgentUnavailable,
@@ -27,10 +28,15 @@ from .errors import (
 # Env vars that pass(1) reads. We only ever propagate these from the caller's
 # environment — never anything else — so an MCP-host env leak can't affect
 # pass behaviour beyond what's explicitly documented.
+#
+# Deliberately omitted: PASSWORD_STORE_GPG_OPTS. It is interpolated raw into
+# every gpg invocation `pass` makes — flags like --output, --recipient, or
+# --keyring are enough for an attacker who controls the env to redirect
+# decryption output or re-encrypt to themselves. Anyone who genuinely needs
+# custom gpg flags can wrap the gpg binary with their own shim on PATH.
 _PASS_ENV_PASSTHROUGH = (
     "PASSWORD_STORE_DIR",
     "PASSWORD_STORE_KEY",
-    "PASSWORD_STORE_GPG_OPTS",
     "PASSWORD_STORE_UMASK",
     "PASSWORD_STORE_GENERATED_LENGTH",
     "PASSWORD_STORE_CHARACTER_SET",
@@ -90,6 +96,13 @@ def run(
     binary = find_pass_binary()
     full = [binary, *args]
     env = build_env(env_extra)
+    # Detach the child from our stdin when the caller has nothing to send.
+    # FastMCP's stdio transport carries JSON-RPC frames on this fd; if `pass`
+    # (or any tool it spawns) ever read a byte, it would corrupt the protocol.
+    # When `input` is supplied, subprocess.run sets stdin=PIPE itself.
+    extra: dict[str, Any] = {}
+    if stdin is None:
+        extra["stdin"] = subprocess.DEVNULL
     try:
         proc = subprocess.run(
             full,
@@ -99,6 +112,7 @@ def run(
             env=env,
             timeout=timeout,
             check=False,
+            **extra,
         )
     except subprocess.TimeoutExpired as exc:
         raise Timeout(f"`pass {args[0] if args else ''}` timed out after {timeout}s") from exc
@@ -148,6 +162,7 @@ def gpg_has_secret_key(gpg_id: str, *, timeout: float = 5.0) -> bool:
     try:
         proc = subprocess.run(
             [binary, "--list-secret-keys", "--with-colons", gpg_id],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -170,6 +185,7 @@ def gpg_agent_available(timeout: float = 2.0) -> bool:
     try:
         proc = subprocess.run(
             [binary, "/bye"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=timeout,

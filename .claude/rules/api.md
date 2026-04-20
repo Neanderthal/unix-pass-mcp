@@ -110,9 +110,11 @@ Every `PassError` subclass carries a stable `code` field. Branch on this, not on
 
 ### Pass-through (read by `pass` itself)
 
-`PASSWORD_STORE_DIR`, `PASSWORD_STORE_KEY`, `PASSWORD_STORE_GPG_OPTS`, `PASSWORD_STORE_UMASK` (default `077`; never overridden), `PASSWORD_STORE_GENERATED_LENGTH`, `PASSWORD_STORE_CHARACTER_SET`, `PASSWORD_STORE_CHARACTER_SET_NO_SYMBOLS`, `PASSWORD_STORE_SIGNING_KEY`, `PASSWORD_STORE_ENABLE_EXTENSIONS`, `PASSWORD_STORE_EXTENSIONS_DIR`.
+`PASSWORD_STORE_DIR`, `PASSWORD_STORE_KEY`, `PASSWORD_STORE_UMASK` (default `077`; never overridden), `PASSWORD_STORE_GENERATED_LENGTH`, `PASSWORD_STORE_CHARACTER_SET`, `PASSWORD_STORE_CHARACTER_SET_NO_SYMBOLS`, `PASSWORD_STORE_SIGNING_KEY`, `PASSWORD_STORE_ENABLE_EXTENSIONS`, `PASSWORD_STORE_EXTENSIONS_DIR`.
 
-Explicitly **not** propagated: `PASSWORD_STORE_X_SELECTION`, `PASSWORD_STORE_CLIP_TIME` (clipboard tools dropped — meaningless over MCP).
+Explicitly **not** propagated:
+- `PASSWORD_STORE_GPG_OPTS` — interpolated raw into every `gpg` call by `pass`; flags like `--recipient`, `--output`, or `--keyring` are enough for a hostile env to redirect decryption or re-encrypt to an attacker. Wrap `gpg` with a PATH shim if you need custom flags.
+- `PASSWORD_STORE_X_SELECTION`, `PASSWORD_STORE_CLIP_TIME` — clipboard tools dropped (meaningless over MCP).
 
 ---
 

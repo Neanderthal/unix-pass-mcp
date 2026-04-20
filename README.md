@@ -170,7 +170,7 @@ Server-specific env vars:
 | `PASS_MCP_AUDIT_LOG` | `~/.local/state/unix-pass-mcp/audit.log` | Append-only JSONL log of actions; set to empty string to disable |
 | `PASS_MCP_TIMEOUT_SECONDS` | `15` | Per-call subprocess timeout |
 
-Standard `pass` env vars are passed through (`PASSWORD_STORE_DIR`, `PASSWORD_STORE_KEY`, `PASSWORD_STORE_GPG_OPTS`, `PASSWORD_STORE_UMASK`, …). See `.claude/rules/architecture.md` §5 for the full list.
+Standard `pass` env vars are passed through (`PASSWORD_STORE_DIR`, `PASSWORD_STORE_KEY`, `PASSWORD_STORE_UMASK`, …). See `.claude/rules/architecture.md` §5 for the full list. **Not** propagated: `PASSWORD_STORE_GPG_OPTS` (lets a hostile env inject `gpg` flags like `--recipient` or `--output`), and the clipboard vars.
 
 ## Security posture
 

@@ -668,13 +668,28 @@ def grep(
     try:
         # Force no color so our parser doesn't see ANSI escapes.
         result = pass_cli.run_or_raise(args, timeout=timeout)
-        matches = _parse_grep_output(result.stdout)
-        audit.log("grep", pattern_len=len(pattern), match_count=len(matches))
+        raw_matches = _parse_grep_output(result.stdout)
+        # Honour PASS_MCP_ALLOWED_PATHS even though `pass grep` itself ignores
+        # it. Without this, an LLM scoped to `web/*` could call grep and read
+        # decrypted lines from `personal/banking/*`.
+        if security.allowlist_active():
+            matches = [m for m in raw_matches if security.path_allowed(m["name"])]
+            redacted_entries = len({m["name"] for m in raw_matches} - {m["name"] for m in matches})
+        else:
+            matches = raw_matches
+            redacted_entries = 0
+        audit.log(
+            "grep",
+            pattern_len=len(pattern),
+            match_count=len(matches),
+            redacted_entries=redacted_entries,
+        )
         return {
             "matches": matches,
             "count": len(matches),
             "pattern": pattern,
             "case_insensitive": case_insensitive,
+            "redacted_entries": redacted_entries,
             "sensitive": True,
         }
     except PassError as exc:

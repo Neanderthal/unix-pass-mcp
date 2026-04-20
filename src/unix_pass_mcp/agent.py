@@ -96,6 +96,7 @@ def prompt_passphrase(spec: DialogSpec) -> str | None:
     try:
         proc = subprocess.run(
             [spec.binary, *spec.args],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             env=_desktop_env(),
@@ -239,6 +240,7 @@ def is_key_cached() -> bool | None:
     try:
         proc = subprocess.run(
             [binary, "keyinfo --list", "/bye"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             env=_desktop_env(),
