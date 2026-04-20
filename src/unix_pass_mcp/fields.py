@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 _FIELD_LINE = re.compile(r"^([A-Za-z][A-Za-z0-9_\-]*):\s?(.*)$")
+_OTPAUTH_LINE = re.compile(r"^otpauth://", re.IGNORECASE)
 
 
 @dataclass
@@ -63,6 +64,41 @@ class ParsedEntry:
                 self.lines[idx] = f"{original_key}: {value}"
                 return
         self.lines.append(f"{key}: {value}")
+
+    def get_otpauth_uri(self) -> str | None:
+        """Return the `otpauth://` URI in the entry, or None.
+
+        pass-otp / browserpass convention: the URI is a bare line (NOT a
+        `Key: value` pair). We accept either case: `otpauth://...` or
+        `OTPAUTH://...`. We also check line 1 (the password line) because
+        `pass otp insert` (without `append`) replaces the entire file with
+        just the URI, putting it on line 1 in OTP-only entries.
+        """
+        if _OTPAUTH_LINE.match(self.password):
+            return self.password
+        for line in self.lines:
+            if _OTPAUTH_LINE.match(line):
+                return line
+        return None
+
+    def set_otpauth_uri(self, uri: str) -> bool:
+        """Replace the existing otpauth line, else append. Returns True if replaced."""
+        if "\n" in uri or "\r" in uri:
+            raise ValueError("otpauth URI must not contain newlines")
+        if not _OTPAUTH_LINE.match(uri):
+            raise ValueError("otpauth URI must start with 'otpauth://'")
+        for idx, line in enumerate(self.lines):
+            if _OTPAUTH_LINE.match(line):
+                self.lines[idx] = uri
+                return True
+        self.lines.append(uri)
+        return False
+
+    def unset_otpauth_uri(self) -> bool:
+        """Remove all `otpauth://` lines. Returns True if any removed."""
+        before = len(self.lines)
+        self.lines = [line for line in self.lines if not _OTPAUTH_LINE.match(line)]
+        return len(self.lines) < before
 
     def unset_field(self, key: str) -> bool:
         """Remove *all* lines matching `key` (case-insensitive). Returns True if any removed."""

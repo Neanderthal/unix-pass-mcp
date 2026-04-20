@@ -2,7 +2,7 @@
 
 Milestone-driven. Each milestone is independently shippable and adds capability without weakening defaults.
 
-**Status:** M0 ✅ · M1 ✅ · M2 ✅ · M3 next
+**Status:** M0 ✅ · M1 ✅ · M2 ✅ · M4 ✅ · M3 next
 
 ---
 
@@ -69,12 +69,18 @@ Bonus shipped this milestone:
 
 ---
 
-## M4 — OTP & extensions (1 day)
+## M4 — OTP ✅
 
-- [ ] `otp` tool — only registered if `pass-otp` is detected on PATH; else returns capability error
-- [ ] `extension` tool (generic) gated behind `PASSWORD_STORE_ENABLE_EXTENSIONS=true` — passes through to a whitelisted extension name
+- [x] `otp` tool — compute current TOTP code from `otpauth://` line in entry. Returns code + `seconds_remaining` + `period`/`digits`/`algorithm`/`issuer`/`account`. Marked sensitive.
+- [x] `otp_uri` tool — return the raw URI (sensitive; contains the secret). Validates before echoing.
+- [x] `otp_set` tool — append or replace the otpauth URI on an existing entry. Write-gated.
+- [x] Native RFC 6238 (SHA1/SHA256/SHA512) — pure stdlib, no `pass-otp` dependency at runtime.
+- [x] Compatible with stores authored by `pass-otp` / browserpass / any tool that follows the [Key URI Format](https://github.com/google/google-authenticator/wiki/Key-Uri-Format) — recognized in line 1 (URI-only entries) or any subsequent body line.
 
-**Done when**: TOTP codes can be retrieved on stores that have `pass-otp` installed.
+**Verified**: 256 unit tests (including all RFC 6238 Appendix B vectors across 3 algorithms) + 31 integration tests (including direct parity with the real `pass-otp` extension). Cross-tool compatibility confirmed: a URI written via `pass otp append` is read identically by `otp_tool`.
+
+Deferred from original M4 plan:
+- Generic `extension` tool — too easy to abuse via prompt injection. Specific extensions (otp, audit, …) get specific tools instead.
 
 ---
 

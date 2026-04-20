@@ -21,7 +21,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from . import agent, audit, fields, pass_cli, security, store
+from . import agent, audit, fields, otp, pass_cli, security, store
 from .errors import AgentUnavailable, AlreadyExists, NotFound, PassError
 
 mcp = FastMCP(
@@ -418,6 +418,103 @@ def generate(
         }
     except PassError as exc:
         audit.log("generate", name=name, ok=False, error=exc.code)
+        raise
+
+
+# ── OTP / TOTP ───────────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="otp",
+    description=(
+        "Compute the current TOTP code for an entry containing an `otpauth://` line "
+        "(pass-otp / browserpass convention). Returns the code plus `seconds_remaining` "
+        "in the current window — if it's very low (<5s), wait for the next window before "
+        "submitting. Marked sensitive."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+    meta={"sensitive": True},
+)
+def otp_tool(name: str) -> dict[str, Any]:
+    try:
+        entry = _decrypt(name)
+        uri = entry.get_otpauth_uri()
+        if uri is None:
+            raise PassError(
+                f"{name} has no otpauth:// line; use otp_set to add one",
+                code="no_otpauth",
+            )
+        params = otp.parse_otpauth_uri(uri)
+        result = otp.compute_totp(params)
+        audit.log("otp", name=name, period=result.period, digits=result.digits)
+        return {
+            "code": result.code,
+            "seconds_remaining": result.seconds_remaining,
+            "period": result.period,
+            "digits": result.digits,
+            "algorithm": result.algorithm,
+            "issuer": result.issuer,
+            "account": result.account,
+            "sensitive": True,
+        }
+    except PassError as exc:
+        audit.log("otp", name=name, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="otp_uri",
+    description=(
+        "Return the raw `otpauth://` URI stored on the entry (contains the secret). "
+        "Use this only when you need to re-enroll the same secret elsewhere; for "
+        "submitting a code, prefer `otp`. Marked sensitive."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False),
+    meta={"sensitive": True},
+)
+def otp_uri(name: str) -> dict[str, Any]:
+    try:
+        entry = _decrypt(name)
+        uri = entry.get_otpauth_uri()
+        if uri is None:
+            raise PassError(f"{name} has no otpauth:// line", code="no_otpauth")
+        # Validate before handing back so we never echo a malformed URI.
+        otp.parse_otpauth_uri(uri)
+        audit.log("otp_uri", name=name)
+        return {"name": name, "uri": uri, "sensitive": True}
+    except PassError as exc:
+        audit.log("otp_uri", name=name, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="otp_set",
+    description=(
+        "Add or replace the `otpauth://` URI on an existing entry, preserving the "
+        "password and all other lines. The URI is validated before write. Refuses if "
+        "the entry does not exist (use `insert` first). Requires PASS_MCP_ALLOW_WRITES=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+)
+def otp_set(name: str, uri: str) -> dict[str, Any]:
+    security.require_writes()
+    if not isinstance(uri, str) or not uri:
+        raise PassError("`uri` must be a non-empty string", code="invalid_argument")
+    # Validate before decrypting so a bad URI fails fast without an audit
+    # log entry that could be confused with a successful write.
+    otp.parse_otpauth_uri(uri)
+    try:
+        entry = _decrypt(name)
+        replaced = entry.set_otpauth_uri(uri.strip())
+        body = fields.serialize(entry)
+        _insert_via_stdin(name, body, multiline=True, force=True)
+        audit.log("otp_set", name=name, replaced=replaced)
+        return {"name": name, "ok": True, "replaced": replaced}
+    except ValueError as exc:
+        audit.log("otp_set", name=name, ok=False, error="invalid_argument")
+        raise PassError(str(exc), code="invalid_argument") from exc
+    except PassError as exc:
+        audit.log("otp_set", name=name, ok=False, error=exc.code)
         raise
 
 

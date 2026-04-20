@@ -2,7 +2,7 @@
 
 MCP server that exposes the [Unix `pass`](https://www.passwordstore.org/) password manager to MCP clients (Claude Code, Claude Desktop, any other host).
 
-> **Status:** M2 — read + safe-write surface complete. 213 unit tests + 25 real-GPG integration tests, all green. Destructive ops (M3) on the [roadmap](./ROADMAP.md).
+> **Status:** M2 + M4 — read, safe-write, and TOTP/OTP surfaces complete. 256 unit tests + 31 real-GPG integration tests, all green. Destructive ops (M3) on the [roadmap](./ROADMAP.md).
 
 ## Why
 
@@ -115,6 +115,8 @@ claude mcp add pass -- uv run --directory /absolute/path/to/unix-pass-mcp unix-p
 | `show_field` | Decrypt and return one named metadata field (`URL`, `Username`, `otpauth`, …). Case-insensitive. |
 | `show_metadata` | Decrypt and return only the entry shape (which fields exist, their values, line count). Password value is never returned. |
 | `unlock_agent` | Pop a desktop password dialog (zenity/kdialog) and warm gpg-agent's cache via loopback pinentry. Use when `store_info` reports `pinentry-curses` + no controlling TTY. The LLM never sees the passphrase. |
+| `otp` | Compute the current TOTP code from an entry's `otpauth://` line. Returns code + `seconds_remaining` so the agent can decide whether to wait for the next window. Marked sensitive. Native RFC 6238 — no `pass-otp` runtime dependency. |
+| `otp_uri` | Return the raw `otpauth://` URI (contains the secret). Use only when re-enrolling the same secret elsewhere. |
 
 ### Writes (gated behind `PASS_MCP_ALLOW_WRITES=1`)
 
@@ -127,11 +129,11 @@ claude mcp add pass -- uv run --directory /absolute/path/to/unix-pass-mcp unix-p
 | `generate` | Generate a new password (length 1–1024, optional `no_symbols`). `in_place=true` keeps metadata; `force=true` overwrites everything. Returns the generated value (sensitive). |
 | `mv` | Rename or move an entry/subfolder. Re-encrypts to the destination subfolder's recipients if they differ. |
 | `cp` | Copy an entry/subfolder, with the same re-encryption semantics. |
+| `otp_set` | Append or replace the `otpauth://` URI on an existing entry. Validates the URI before writing. |
 
 ### Coming next
 
 - **M3 (destructive + git):** `rm`, `init`, `reencrypt`, `git` — gated behind `PASS_MCP_ALLOW_DESTRUCTIVE=1`
-- **M4 (extensions):** `otp` (if `pass-otp` is installed)
 
 ## Configuration
 
