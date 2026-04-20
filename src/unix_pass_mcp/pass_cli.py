@@ -135,6 +135,33 @@ def _sanitize_stderr(text: str) -> str:
     return out[:2000]
 
 
+def gpg_has_secret_key(gpg_id: str, *, timeout: float = 5.0) -> bool:
+    """True iff gpg can find at least one secret key matching `gpg_id`.
+
+    `gpg_id` may be an email, fingerprint, or short key ID — gpg resolves them
+    all. Used as a pre-flight check before re-encrypting the store with a new
+    key, so we never silently lock the user out.
+    """
+    binary = shutil.which("gpg")
+    if binary is None:
+        return False
+    try:
+        proc = subprocess.run(
+            [binary, "--list-secret-keys", "--with-colons", gpg_id],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    if proc.returncode != 0:
+        return False
+    # `gpg --list-secret-keys --with-colons` prints `sec:` records when secret
+    # keys are found; nothing if not.
+    return any(line.startswith("sec:") for line in proc.stdout.splitlines())
+
+
 def gpg_agent_available(timeout: float = 2.0) -> bool:
     """True iff `gpg-connect-agent /bye` exits 0."""
     binary = shutil.which("gpg-connect-agent")

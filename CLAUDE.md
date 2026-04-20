@@ -21,7 +21,7 @@ PASS_MCP_INTEGRATION=1 uv run pytest -q tests/integration   # real gpg
 
 ## Status
 
-See [`ROADMAP.md`](./ROADMAP.md). M0 + M1 + M2 + M3a + M4 + M5 done (read, safe writes, git, OTP, hardening). M3b (destructive ops) next.
+See [`ROADMAP.md`](./ROADMAP.md). M0 + M1 + M2 + M3a + M3b(init/reencrypt) + M4 + M5 done. M6 (distribution) next.
 
 ## Conventions specific to this repo
 

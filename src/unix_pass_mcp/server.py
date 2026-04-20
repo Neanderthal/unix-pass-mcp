@@ -795,6 +795,150 @@ def _strict_startup_checks() -> None:
         sys.exit(2)
 
 
+_GPG_ID_FORBIDDEN = set("\n\r\x00;|`$<>\"'\\")
+
+
+def _validate_gpg_id(gpg_id: str) -> str:
+    if not isinstance(gpg_id, str) or not gpg_id:
+        raise PassError("gpg-id must be a non-empty string", code="invalid_argument")
+    if len(gpg_id) > 256:
+        raise PassError("gpg-id longer than 256 chars", code="invalid_argument")
+    if gpg_id.startswith("-"):
+        raise PassError(
+            "gpg-id may not start with '-' (would be parsed as a flag)",
+            code="invalid_argument",
+        )
+    if any(c in _GPG_ID_FORBIDDEN for c in gpg_id):
+        raise PassError(
+            f"gpg-id contains disallowed characters: {gpg_id!r}", code="invalid_argument"
+        )
+    return gpg_id
+
+
+def _read_subdir_gpg_ids(subfolder: str | None) -> list[str]:
+    """Read the `.gpg-id` for the given (sub)folder. Empty list if missing."""
+    base = store.resolve_store_dir()
+    target = base / subfolder / ".gpg-id" if subfolder else base / ".gpg-id"
+    if not target.is_file():
+        return []
+    text = target.read_text(encoding="utf-8")
+    return [line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")]
+
+
+@mcp.tool(
+    name="init",
+    description=(
+        "Initialize the password store (or a subfolder) with the given GPG recipient(s). "
+        "Re-encrypts every existing entry in scope to the new recipient set — this is "
+        "DESTRUCTIVE. Pass an empty `gpg_ids` list to remove the .gpg-id file for the "
+        "subfolder (entries inherit the parent's recipients). "
+        "Refuses if the user has no secret key for any of the new recipients (would lock "
+        "the user out); pass `force=true` to override (e.g. team scenarios where you're "
+        "delegating access). Requires PASS_MCP_ALLOW_DESTRUCTIVE=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False),
+)
+def init(gpg_ids: list[str], subfolder: str | None = None, force: bool = False) -> dict[str, Any]:
+    security.require_destructive()
+    sub = security.validate_subfolder(subfolder)
+    if not isinstance(gpg_ids, list):
+        raise PassError("`gpg_ids` must be a list of strings", code="invalid_argument")
+
+    # Empty list = remove the .gpg-id (per pass(1): single empty-string id removes it).
+    if len(gpg_ids) == 0:
+        if sub is None:
+            raise PassError(
+                "cannot remove the root .gpg-id (would leave the store unencryptable); "
+                "specify a subfolder",
+                code="invalid_argument",
+            )
+        args = ["init", "--path", sub, ""]
+        try:
+            pass_cli.run_or_raise(args)
+            audit.log("init", subfolder=sub, removed=True)
+            return {"subfolder": sub, "ok": True, "removed": True, "gpg_ids": []}
+        except PassError as exc:
+            audit.log("init", subfolder=sub, ok=False, error=exc.code)
+            raise
+
+    validated = [_validate_gpg_id(gid) for gid in gpg_ids]
+    if not force and not any(pass_cli.gpg_has_secret_key(gid) for gid in validated):
+        raise PassError(
+            f"none of the given gpg-ids have a secret key on this machine: "
+            f"{validated!r}. Re-encrypting would lock you out of the store. "
+            f"Pass force=true if this is intentional (e.g. delegating to a team).",
+            code="would_lock_out",
+        )
+
+    args = ["init"]
+    if sub is not None:
+        args.extend(["--path", sub])
+    args.extend(validated)
+    try:
+        pass_cli.run_or_raise(args, timeout=120.0)  # re-encryption can take a while
+        audit.log(
+            "init",
+            subfolder=sub,
+            recipient_count=len(validated),
+            forced=force,
+        )
+        return {"subfolder": sub, "ok": True, "gpg_ids": validated}
+    except PassError as exc:
+        audit.log("init", subfolder=sub, ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="reencrypt",
+    description=(
+        "Re-run `pass init` against the *current* `.gpg-id` recipients (no key change). "
+        "Use after subkey rotation or to repair a store where some files are "
+        "encrypted to outdated recipients. Note: `pass init` is a no-op when each "
+        "file's existing recipients already match the .gpg-id — there is no way to "
+        "force a fresh ciphertext without changing the recipient set. "
+        "Requires PASS_MCP_ALLOW_DESTRUCTIVE=1."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True),
+)
+def reencrypt(subfolder: str | None = None) -> dict[str, Any]:
+    security.require_destructive()
+    sub = security.validate_subfolder(subfolder)
+    current = _read_subdir_gpg_ids(sub)
+    if not current:
+        raise NotFound(f"no .gpg-id at {('root' if sub is None else sub)!r}; cannot reencrypt")
+    # Re-use init's safety checks (won't raise would_lock_out since current ids
+    # are by definition the ones we used to read the store).
+    return init(current, subfolder=sub, force=False)
+    """Refuse to start under demonstrably-unsafe conditions.
+
+    Bypass with `PASS_MCP_ALLOW_UNSAFE=1` (do not). The bypass exists so an
+    operator can recover a misconfigured store via the MCP — not for steady-
+    state use. Architecture §6.7.
+    """
+    import sys
+
+    if security._env_flag("PASS_MCP_ALLOW_UNSAFE"):
+        return
+    store_dir = store.resolve_store_dir()
+    if store_dir.exists() and store._world_readable(store_dir):
+        sys.stderr.write(
+            f"unix-pass-mcp: refusing to start: store directory {store_dir} is "
+            f"world-accessible (mode bits o+rwx).\n"
+            f"  Fix: `chmod -R go-rwx {store_dir}`, or bypass with "
+            f"PASS_MCP_ALLOW_UNSAFE=1.\n"
+        )
+        sys.exit(2)
+    umask = os.environ.get("PASSWORD_STORE_UMASK", "077")
+    if not store._is_at_least_077(umask):
+        sys.stderr.write(
+            f"unix-pass-mcp: refusing to start: PASSWORD_STORE_UMASK={umask!r} "
+            f"is weaker than 077; new files would be readable by group/other.\n"
+            f"  Fix: `unset PASSWORD_STORE_UMASK` (defaults to 077), or bypass "
+            f"with PASS_MCP_ALLOW_UNSAFE=1.\n"
+        )
+        sys.exit(2)
+
+
 def main() -> None:
     _strict_startup_checks()
     mcp.run("stdio")

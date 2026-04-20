@@ -2,7 +2,7 @@
 
 Milestone-driven. Each milestone is independently shippable and adds capability without weakening defaults.
 
-**Status:** M0 ✅ · M1 ✅ · M2 ✅ · M3a git ✅ · M4 ✅ · M5 ✅ · M3b destructive next
+**Status:** M0 ✅ · M1 ✅ · M2 ✅ · M3a git ✅ · M3b init/reencrypt ✅ · M4 ✅ · M5 ✅ · M6 distribution next
 
 ---
 
@@ -74,13 +74,16 @@ Deliberately omitted vs. original plan:
 - `git_remote -v` — `store_info.git_remotes` covers it.
 - All write-history operations (`config`, `reset`, `checkout`, `rebase`, `filter-branch`) — never useful via an LLM.
 
-## M3b — Destructive ops (next)
+## M3b — Destructive ops ✅ (init / reencrypt)
 
-- [ ] `rm` (`--recursive`, always `--force` since pass would prompt without TTY)
-- [ ] `init` / `reencrypt`
-- [ ] Destructive gate: `PASS_MCP_ALLOW_DESTRUCTIVE=1`
+- [x] `init(gpg_ids, subfolder?, force?)` — initialize root or subfolder; lock-out pre-flight (refuses if user has no secret key for any new recipient unless `force=true`); empty `gpg_ids` removes a subfolder's `.gpg-id`
+- [x] `reencrypt(subfolder?)` — convenience wrapper that re-runs `init` with the current `.gpg-id`. Honest about being a no-op when recipients haven't changed (`pass init`'s built-in optimization)
+- [x] Destructive gate: `PASS_MCP_ALLOW_DESTRUCTIVE=1`
 
-**Done when**: an opted-in user can fully administer the store.
+Deferred:
+- [ ] `rm` — still pending. Decision needed: do we want `rm -r` exposed at all? An LLM with the destructive gate enabled could wipe the store.
+
+**Verified**: 336 unit tests + 45 integration tests (incl. real key rotation with two ephemeral GPG keys), all green.
 
 ---
 

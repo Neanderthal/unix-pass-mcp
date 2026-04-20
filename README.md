@@ -2,7 +2,7 @@
 
 MCP server that exposes the [Unix `pass`](https://www.passwordstore.org/) password manager to MCP clients (Claude Code, Claude Desktop, any other host).
 
-> **Status:** M2 + M3a + M4 + M5 — read, safe-write, TOTP/OTP, git, and hardening surfaces complete. 22 tools, 308 unit tests + 38 real-GPG integration tests, all green. Destructive ops (M3b) on the [roadmap](./ROADMAP.md).
+> **Status:** M2 + M3 + M4 + M5 — read, safe-write, key administration, TOTP/OTP, git, and hardening surfaces complete. 24 tools, 336 unit tests + 45 real-GPG integration tests, all green. Distribution (M6) on the [roadmap](./ROADMAP.md).
 
 ## Why
 
@@ -143,9 +143,16 @@ claude mcp add pass -- uv run --directory /absolute/path/to/unix-pass-mcp unix-p
 | `git_pull` | `git pull --ff-only` (no merge commits, no rebase). |
 | `git_push` | `git push` (never force). |
 
+### Destructive (gated behind `PASS_MCP_ALLOW_DESTRUCTIVE=1`)
+
+| Tool | Description |
+|---|---|
+| `init` | Initialize the store (or a subfolder) with new GPG recipients. Re-encrypts every entry in scope. Refuses if the user has no secret key for any of the new recipients, unless `force=true`. Empty `gpg_ids` list removes a subfolder's `.gpg-id`. |
+| `reencrypt` | Re-run `init` with the *current* recipients. Useful after subkey rotation. No-op if recipients haven't changed. |
+
 ### Coming next
 
-- **M3b (destructive ops):** `rm`, `init`, `reencrypt` — gated behind `PASS_MCP_ALLOW_DESTRUCTIVE=1`
+- **M6 (distribution):** PyPI publish workflow, Claude Desktop config snippets, optional Docker.
 
 ## Configuration
 

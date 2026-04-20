@@ -44,9 +44,14 @@ agents that branch on result shapes.
 | `git_pull` | – | `git pull --ff-only` (refuses divergence). |
 | `git_push` | – | `git push` (never `--force`). |
 
-### Destructive (M3b — not yet shipped)
+### Destructive (require `PASS_MCP_ALLOW_DESTRUCTIVE=1` *and* writes)
 
-`rm`, `init`, `reencrypt` will require `PASS_MCP_ALLOW_DESTRUCTIVE=1` once added.
+| Tool | Args | Notes |
+|---|---|---|
+| `init` | `gpg_ids`, `subfolder?`, `force=false` | Re-encrypts every entry in scope. Lock-out pre-flight refuses unless `force=true`. Empty `gpg_ids` list removes a subfolder's `.gpg-id`. |
+| `reencrypt` | `subfolder?` | Convenience wrapper: re-runs `init` with current `.gpg-id`. No-op when recipients are unchanged. |
+
+`rm` is intentionally not shipped yet.
 
 ---
 
@@ -69,6 +74,7 @@ Every `PassError` subclass carries a stable `code` field. Branch on this, not on
 | `already_exists` | `AlreadyExists` | Destination/target exists; pass `force=true` only on explicit user confirmation. |
 | `no_otpauth` | `PassError` | Entry has no `otpauth://` line. Use `otp_set` to add one. |
 | `not_a_git_repo` | `NotAGitRepo` | git tool called against a store that isn't a git repo. Run `pass git init` in a real terminal. |
+| `would_lock_out` | `PassError` | `init` called with recipients for which the user has no secret key on this machine. Pass `force=true` if delegating access. |
 | `agent_unavailable` | `AgentUnavailable` | gpg-agent isn't running or pinentry can't prompt. Try `unlock_agent`, or fix `gpg-agent.conf`. |
 | `gpg_error` | `GpgError` | Decryption failed — usually wrong key or expired secret. Stderr (sanitized) included in message. |
 | `gpg_missing` | `PassError` | `gpg` binary missing on PATH. |
