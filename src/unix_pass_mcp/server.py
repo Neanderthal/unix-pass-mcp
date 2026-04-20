@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -169,20 +170,34 @@ def show_field(name: str, field: str) -> dict[str, Any]:
         "until the agent's cache TTL expires (default 600s, set via `default-cache-ttl` "
         "in ~/.gnupg/gpg-agent.conf). Use this when `store_info` reports "
         "pinentry-curses + no controlling TTY. The passphrase travels: "
-        "desktop dialog → our process → gpg stdin. The LLM never sees it."
+        "desktop dialog → our process → gpg stdin. The LLM never sees it. "
+        "Optional `target` is a pass-name to decrypt against — useful when the "
+        "store has multiple `.gpg-id` recipients and you want to warm a "
+        "specific key. If omitted, the smallest in-scope entry is used."
     ),
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
 )
-def unlock_agent() -> dict[str, object]:
+def unlock_agent(target: str | None = None) -> dict[str, object]:
     agent.require_agent_running()
     info = store.collect()
     has_display = info.pinentry is not None and info.pinentry.has_display
+    target_path: Path | None = None
+    if target is not None:
+        security.validate_pass_name(target)
+        security.assert_path_allowed(target)
+        target_path = store.resolve_store_dir() / f"{target}.gpg"
+        if not target_path.is_file():
+            raise NotFound(f"entry {target!r} does not exist")
     try:
-        result = agent.unlock(has_display=has_display)
+        result = agent.unlock(
+            has_display=has_display,
+            target=target_path,
+            name_allowed=security.path_allowed,
+        )
     except PassError as exc:
-        audit.log("unlock_agent", ok=False, error=exc.code)
+        audit.log("unlock_agent", ok=False, error=exc.code, target=target)
         raise
-    audit.log("unlock_agent", ok=bool(result.get("ok")))
+    audit.log("unlock_agent", ok=bool(result.get("ok")), target=target)
     return result
 
 
@@ -825,7 +840,17 @@ def _strict_startup_checks() -> None:
         sys.exit(2)
 
 
-_GPG_ID_FORBIDDEN = set("\n\r\x00;|`$<>\"'\\")
+# Positive allowlist for gpg-id values. Real recipients fall into one of:
+#   - 40-char fingerprint (hex)               D85F E022 9E97 ... (with/without spaces)
+#   - 8/16-char short / long key ID (hex)     DEADBEEF, DEADBEEFDEADBEEF, 0xDEADBEEF
+#   - email                                   alice+ops@example.com
+#   - free-form user-id substring             "Alice Smith"
+# A whitelist beats a denylist here: previously we tried to enumerate shell
+# metacharacters, which is fragile (forget one and you have an injection).
+# subprocess is invoked with shell=False so this is defence-in-depth — the
+# allowlist exists to reject typo-class garbage cleanly with `invalid_argument`
+# instead of letting `gpg` complain about an unknown recipient.
+_VALID_GPG_ID = re.compile(r"^[A-Za-z0-9._@+\- ]+$")
 
 
 def _validate_gpg_id(gpg_id: str) -> str:
@@ -838,9 +863,11 @@ def _validate_gpg_id(gpg_id: str) -> str:
             "gpg-id may not start with '-' (would be parsed as a flag)",
             code="invalid_argument",
         )
-    if any(c in _GPG_ID_FORBIDDEN for c in gpg_id):
+    if not _VALID_GPG_ID.match(gpg_id):
         raise PassError(
-            f"gpg-id contains disallowed characters: {gpg_id!r}", code="invalid_argument"
+            f"gpg-id contains disallowed characters (allowed: letters, digits, "
+            f"`. _ @ + -` and space): {gpg_id!r}",
+            code="invalid_argument",
         )
     return gpg_id
 

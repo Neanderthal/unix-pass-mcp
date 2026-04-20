@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -118,19 +119,31 @@ def prompt_passphrase(spec: DialogSpec) -> str | None:
     return passphrase or None
 
 
-def find_warmup_target() -> Path | None:
-    """Pick the smallest `.gpg` file in the store as a decryption probe.
+def find_warmup_target(name_allowed: Callable[[str], bool] | None = None) -> Path | None:
+    """Pick the smallest in-scope `.gpg` file in the store as a decryption probe.
 
-    Smaller files decrypt faster. Returns None if the store has no entries —
-    in that case there's nothing to unlock against and nothing to show anyway.
+    Smaller files decrypt faster. Returns None if the store has no entries (or
+    no in-scope entries when `name_allowed` is set) — in that case there's
+    nothing to unlock against and nothing to show anyway.
+
+    `name_allowed` is the path-allowlist predicate from `security.path_allowed`.
+    Without it, this would silently decrypt the smallest entry anywhere in the
+    store, ignoring PASS_MCP_ALLOWED_PATHS — i.e. an LLM scoped to `web/*`
+    could trip a warmup on `personal/banking/chase` and warm its key in
+    gpg-agent. The filter closes that hole.
     """
     store_dir = resolve_store_dir()
     if not store_dir.exists():
         return None
     smallest: tuple[int, Path] | None = None
     for path in store_dir.rglob("*.gpg"):
-        if any(part.startswith(".") for part in path.relative_to(store_dir).parts):
+        rel = path.relative_to(store_dir)
+        if any(part.startswith(".") for part in rel.parts):
             continue  # skip .git, .extensions, etc.
+        if name_allowed is not None:
+            name = str(rel.with_suffix(""))
+            if not name_allowed(name):
+                continue
         try:
             size = path.stat().st_size
         except OSError:
@@ -181,10 +194,21 @@ def warm_agent_with_passphrase(passphrase: str, target: Path) -> bool:
     return proc.returncode == 0
 
 
-def unlock(*, has_display: bool) -> dict[str, object]:
+def unlock(
+    *,
+    has_display: bool,
+    target: Path | None = None,
+    name_allowed: Callable[[str], bool] | None = None,
+) -> dict[str, object]:
     """High-level orchestrator. Returns a result dict; does not raise on
     user-facing failures (cancellation, wrong passphrase) — those are normal
     outcomes encoded in the result.
+
+    `target` is an explicit `.gpg` file to decrypt against (caller is
+    responsible for validating + path-allowing the corresponding pass-name).
+    When None, we fall back to scanning the store for the smallest in-scope
+    entry, with `name_allowed` filtering out anything outside
+    PASS_MCP_ALLOWED_PATHS.
     """
     if not has_display:
         raise PassError(
@@ -201,11 +225,12 @@ def unlock(*, has_display: bool) -> dict[str, object]:
             "variant (pinentry-gnome3 / pinentry-qt / pinentry-gtk-2).",
             code="no_dialog",
         )
-    target = find_warmup_target()
+    if target is None:
+        target = find_warmup_target(name_allowed=name_allowed)
     if target is None:
         raise PassError(
-            "password store has no entries to decrypt — cannot warm the agent "
-            "cache. Insert at least one entry first.",
+            "no in-scope entries to decrypt — cannot warm the agent cache. "
+            "Insert at least one entry, or pass an explicit `target`.",
             code="empty_store",
         )
 

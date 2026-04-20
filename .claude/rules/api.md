@@ -18,7 +18,7 @@ agents that branch on result shapes.
 | `show_field` | `name`, `field` | Decrypt one `Key: value` field (case-insensitive). **sensitive**. |
 | `show_metadata` | `name` | Entry shape only — never returns the password value. |
 | `grep` | `pattern`, `confirm_decrypt_all=false`, `case_insensitive=false` | Decrypts every entry. **sensitive**. Refuses without confirm flag. |
-| `unlock_agent` | – | Pop desktop dialog → loopback gpg → warm agent cache. |
+| `unlock_agent` | `target?` | Pop desktop dialog → loopback gpg → warm agent cache. Optional `target` is a pass-name to decrypt against (validated + path-allowlist-checked); without it, picks the smallest in-scope entry. |
 | `otp` | `name` | Compute current TOTP code + `seconds_remaining`. **sensitive**. |
 | `otp_uri` | `name` | Return raw `otpauth://` URI. **sensitive**. |
 | `git_status` | – | Porcelain v2 → `{clean, branch, upstream, ahead, behind, dirty_files}`. |

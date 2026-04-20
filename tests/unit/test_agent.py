@@ -165,6 +165,26 @@ def test_find_warmup_target_returns_none_when_missing_store(
     assert agent.find_warmup_target() is None
 
 
+def test_find_warmup_target_honours_name_filter(initialized_store: Path) -> None:
+    """Without filter we'd happily warm against a banking entry while scoped to
+    web/*. The filter prevents cross-scope decryption.
+    """
+    (initialized_store / "web").mkdir()
+    (initialized_store / "web" / "tiny.gpg").write_bytes(b"x" * 50)
+    (initialized_store / "personal").mkdir()
+    (initialized_store / "personal" / "banking.gpg").write_bytes(b"x" * 5)
+    target = agent.find_warmup_target(name_allowed=lambda name: name.startswith("web/"))
+    assert target is not None
+    assert target.name == "tiny.gpg"
+    assert "personal" not in str(target)
+
+
+def test_find_warmup_target_returns_none_when_no_in_scope(initialized_store: Path) -> None:
+    (initialized_store / "personal").mkdir()
+    (initialized_store / "personal" / "banking.gpg").write_bytes(b"x")
+    assert agent.find_warmup_target(name_allowed=lambda name: name.startswith("web/")) is None
+
+
 # ── warm_agent_with_passphrase ───────────────────────────────────────────────
 
 
@@ -293,3 +313,74 @@ def test_unlock_returns_wrong_passphrase_on_decrypt_failure(
     monkeypatch.setattr(agent.subprocess, "run", fake_run)
     result = agent.unlock(has_display=True)
     assert result == {"ok": False, "reason": "wrong_passphrase_or_decrypt_failed"}
+
+
+# ── unlock with explicit target ──────────────────────────────────────────────
+
+
+def test_unlock_uses_explicit_target_path(
+    monkeypatch: pytest.MonkeyPatch, initialized_store: Path
+) -> None:
+    """When `target` is given, no scanning happens — that entry is decrypted."""
+    chosen = initialized_store / "specific.gpg"
+    chosen.write_bytes(b"x" * 200)
+    # Add a smaller entry that would otherwise be picked.
+    (initialized_store / "smaller.gpg").write_bytes(b"x")
+    monkeypatch.setattr(agent.shutil, "which", lambda b: f"/usr/bin/{b}")
+
+    seen_targets: list[str] = []
+
+    def fake_run(args, *, input=None, **kw):
+        if "zenity" in args[0]:
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="pw\n", stderr="")
+        # The decrypt call's last arg is the target path.
+        seen_targets.append(args[-1])
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(agent.subprocess, "run", fake_run)
+    result = agent.unlock(has_display=True, target=chosen)
+    assert result["ok"] is True
+    assert seen_targets == [str(chosen)]
+
+
+# ── server-level unlock_agent: target validation + path allowlist ────────────
+
+
+def test_server_unlock_agent_rejects_invalid_pass_name() -> None:
+    from unix_pass_mcp import server
+    from unix_pass_mcp.errors import InvalidPassName
+
+    with pytest.raises(InvalidPassName):
+        server.unlock_agent(target="../escape")
+
+
+def test_server_unlock_agent_rejects_out_of_scope_target(
+    monkeypatch: pytest.MonkeyPatch, initialized_store: Path
+) -> None:
+    """If PASS_MCP_ALLOWED_PATHS is set, unlock_agent must refuse to decrypt
+    against a target outside the allowlist — otherwise it's a scope escape:
+    the agent could warm a banking key while nominally restricted to web/*.
+    """
+    from unix_pass_mcp import server
+    from unix_pass_mcp.errors import PathNotAllowed
+
+    monkeypatch.setenv("PASS_MCP_ALLOWED_PATHS", "web/*")
+    (initialized_store / "personal").mkdir()
+    (initialized_store / "personal" / "banking.gpg").write_bytes(b"x")
+    with pytest.raises(PathNotAllowed):
+        server.unlock_agent(target="personal/banking")
+
+
+def test_server_unlock_agent_missing_target_raises_not_found(
+    monkeypatch: pytest.MonkeyPatch, initialized_store: Path
+) -> None:
+    from unix_pass_mcp import server
+    from unix_pass_mcp.errors import NotFound
+
+    # gpg-agent probe must be stubbed since we don't have one in unit-test env.
+    monkeypatch.setattr(
+        "unix_pass_mcp.pass_cli.gpg_agent_available",
+        lambda *a, **kw: True,
+    )
+    with pytest.raises(NotFound):
+        server.unlock_agent(target="does/not/exist")
