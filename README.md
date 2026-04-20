@@ -2,7 +2,7 @@
 
 MCP server that exposes the [Unix `pass`](https://www.passwordstore.org/) password manager to MCP clients (Claude Code, Claude Desktop, any other host).
 
-> **Status:** M2 + M3a + M4 — read, safe-write, TOTP/OTP, and git surfaces complete. 288 unit tests + 38 real-GPG integration tests, all green. Destructive ops (M3b) on the [roadmap](./ROADMAP.md).
+> **Status:** M2 + M3a + M4 + M5 — read, safe-write, TOTP/OTP, git, and hardening surfaces complete. 22 tools, 308 unit tests + 38 real-GPG integration tests, all green. Destructive ops (M3b) on the [roadmap](./ROADMAP.md).
 
 ## Why
 
@@ -115,6 +115,7 @@ claude mcp add pass -- uv run --directory /absolute/path/to/unix-pass-mcp unix-p
 | `show_field` | Decrypt and return one named metadata field (`URL`, `Username`, `otpauth`, …). Case-insensitive. |
 | `show_metadata` | Decrypt and return only the entry shape (which fields exist, their values, line count). Password value is never returned. |
 | `unlock_agent` | Pop a desktop password dialog (zenity/kdialog) and warm gpg-agent's cache via loopback pinentry. Use when `store_info` reports `pinentry-curses` + no controlling TTY. The LLM never sees the passphrase. |
+| `grep` | Search inside the decrypted body of every entry. Slow + costly (decrypts whole store) — requires `confirm_decrypt_all=true`. Marked sensitive. |
 | `otp` | Compute the current TOTP code from an entry's `otpauth://` line. Returns code + `seconds_remaining` so the agent can decide whether to wait for the next window. Marked sensitive. Native RFC 6238 — no `pass-otp` runtime dependency. |
 | `otp_uri` | Return the raw `otpauth://` URI (contains the secret). Use only when re-enrolling the same secret elsewhere. |
 
@@ -124,8 +125,8 @@ claude mcp add pass -- uv run --directory /absolute/path/to/unix-pass-mcp unix-p
 |---|---|
 | `insert` | Create or overwrite a single-line entry. Password via stdin (never argv). Refuses overwrite without `force=true`. |
 | `insert_multiline` | Create or overwrite a full-body entry (line 1 = password, rest = `Key: value` metadata). |
-| `set_field` | Update one `Key: value` field on an existing entry; preserves password and other lines. |
-| `unset_field` | Remove all lines matching a field key (case-insensitive). No-op if absent. |
+| `set_field` | Update one `Key: value` field on an existing entry; preserves password and other lines. `simulate=true` returns the would-be body without writing. |
+| `unset_field` | Remove all lines matching a field key (case-insensitive). No-op if absent. `simulate=true` for dry-run. |
 | `generate` | Generate a new password (length 1–1024, optional `no_symbols`). `in_place=true` keeps metadata; `force=true` overwrites everything. Returns the generated value (sensitive). |
 | `mv` | Rename or move an entry/subfolder. Re-encrypts to the destination subfolder's recipients if they differ. |
 | `cp` | Copy an entry/subfolder, with the same re-encryption semantics. |
@@ -155,7 +156,9 @@ Server-specific env vars:
 | `PASS_MCP_ALLOW_WRITES` | unset | Required for any mutating tool (M2+) |
 | `PASS_MCP_ALLOW_DESTRUCTIVE` | unset | Required for `rm`/`init`/`reencrypt` (M3b+) |
 | `PASS_MCP_ALLOW_NETWORK` | unset | Required for `git_pull`/`git_push` |
+| `PASS_MCP_ALLOW_UNSAFE` | unset | Bypass strict startup checks (world-readable store, weak umask). Don't use this. |
 | `PASS_MCP_ALLOWED_PATHS` | unset (= all) | Comma-separated fnmatch globs scoping which entries the server may touch |
+| `PASS_MCP_GREP_TIMEOUT_SECONDS` | `120` | Per-call timeout for `grep` (decrypts whole store) |
 | `PASS_MCP_REQUIRE_AGENT` | `1` | Refuse to decrypt if `gpg-agent` is not reachable |
 | `PASS_MCP_AUDIT_LOG` | `~/.local/state/unix-pass-mcp/audit.log` | Append-only JSONL log of actions; set to empty string to disable |
 | `PASS_MCP_TIMEOUT_SECONDS` | `15` | Per-call subprocess timeout |

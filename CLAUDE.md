@@ -15,12 +15,13 @@ PASS_MCP_INTEGRATION=1 uv run pytest -q tests/integration   # real gpg
 ## Rules
 
 - [Architecture & security](./.claude/rules/architecture.md) — components, tool surface, error model, security model. Update when adding/changing tools or env vars.
+- [API reference](./.claude/rules/api.md) — every tool, every error code, every env var. Keep in sync when adding tools or codes.
 - [Agent workflow](./.claude/rules/agent-workflow.md) — how to drive this MCP from an LLM agent (Claude Desktop / Code / Agent SDK / any MCP host) together with a browser MCP for autonomous account creation and profile filling. Load into the agent's system prompt.
 - Global rules live in `~/.claude/rules/`: refactoring, debugging, git-workflow, code-style, testing.
 
 ## Status
 
-See [`ROADMAP.md`](./ROADMAP.md). M0 + M1 + M2 + M3a + M4 done (read, safe writes, git, OTP). M3b (destructive ops) next.
+See [`ROADMAP.md`](./ROADMAP.md). M0 + M1 + M2 + M3a + M4 + M5 done (read, safe writes, git, OTP, hardening). M3b (destructive ops) next.
 
 ## Conventions specific to this repo
 

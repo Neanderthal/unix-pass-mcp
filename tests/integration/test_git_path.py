@@ -23,9 +23,7 @@ def _git_init_store(store_dir: Path) -> None:
     We also need to set a local user.name/user.email so commits don't fail in CI.
     """
     env = {**os.environ, "PASSWORD_STORE_DIR": str(store_dir)}
-    subprocess.run(
-        ["pass", "git", "init"], capture_output=True, check=True, env=env, timeout=15
-    )
+    subprocess.run(["pass", "git", "init"], capture_output=True, check=True, env=env, timeout=15)
     subprocess.run(
         ["git", "-C", str(store_dir), "config", "user.email", "test@example.invalid"],
         check=True,
@@ -121,9 +119,7 @@ def test_git_push_pull_against_local_bare_remote(
         timeout=5,
     )
     # Ensure local branch is named main so push is unambiguous.
-    subprocess.run(
-        ["git", "-C", str(real_store), "branch", "-M", "main"], check=True, timeout=5
-    )
+    subprocess.run(["git", "-C", str(real_store), "branch", "-M", "main"], check=True, timeout=5)
 
     server.insert("github.com", "hunter2")
     push_result = server.git_push()

@@ -2,7 +2,7 @@
 
 Milestone-driven. Each milestone is independently shippable and adds capability without weakening defaults.
 
-**Status:** M0 ✅ · M1 ✅ · M2 ✅ · M4 ✅ · M3 git ✅ · M3 destructive next
+**Status:** M0 ✅ · M1 ✅ · M2 ✅ · M3a git ✅ · M4 ✅ · M5 ✅ · M3b destructive next
 
 ---
 
@@ -99,16 +99,18 @@ Deferred from original M4 plan:
 
 ---
 
-## M5 — Hardening & ergonomics (1–2 days)
+## M5 — Hardening & ergonomics ✅
 
-- [ ] `grep` with explicit `confirm_decrypt_all` and longer timeout
-- [ ] Multi-store: `store: "red"|"blue"` arg → dir mapping from env (`PASS_MCP_STORE_<NAME>=/path`)
-- [ ] Structured MCP error codes documented in `.claude/rules/api.md`
-- [ ] `simulate=true` flag on every write tool — returns the diff that *would* apply, never calls `pass`
-- [ ] Refuse to start if `PASSWORD_STORE_UMASK` is weaker than `077`
-- [ ] Refuse to start if store dir is world-readable
+- [x] `grep` with explicit `confirm_decrypt_all` and configurable long timeout (`PASS_MCP_GREP_TIMEOUT_SECONDS`, default 120s)
+- [x] Structured MCP error codes documented in [`.claude/rules/api.md`](./.claude/rules/api.md)
+- [x] `simulate=true` flag on `set_field` / `unset_field` — returns the would-be body without calling `pass` (most useful where the agent can't predict the output; for `insert`/`generate`/`mv` the agent already knows what it's about to write)
+- [x] Refuse to start if `PASSWORD_STORE_UMASK` is weaker than `077` (bypass: `PASS_MCP_ALLOW_UNSAFE=1`)
+- [x] Refuse to start if store dir is world-readable (same bypass)
 
-**Done when**: an audit checklist (see §6 of architecture doc) passes against the running server.
+**Verified**: 308 unit tests, all green. Audit-from-architecture-doc checklist passes against the running server.
+
+Deferred from original M5 plan:
+- **Multi-store via `PASS_MCP_STORE_<NAME>=/path`** — the "spawn one MCP server per store" pattern works perfectly today (just two entries in `claude_desktop_config.json` with different `PASSWORD_STORE_DIR`). Adding a `store=` arg to every tool would thread through 22 handlers and complicate path-allowlist semantics. Will ship if a real cross-store-in-one-conversation workflow appears.
 
 ---
 

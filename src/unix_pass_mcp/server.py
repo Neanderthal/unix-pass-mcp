@@ -15,6 +15,7 @@ Convention for handlers:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import asdict
 from typing import Any
 
@@ -306,19 +307,34 @@ def insert_multiline(name: str, body: str, force: bool = False) -> dict[str, Any
         "preserving the password and all other lines. Field lookup is case-insensitive; "
         "existing case is preserved on update, new fields are appended in the requested "
         "case. Refuses if the entry does not exist (use `insert_multiline` to create). "
-        "Requires PASS_MCP_ALLOW_WRITES=1."
+        "Pass `simulate=true` to compute the would-be body without writing — useful for "
+        "agent dry-runs. Requires PASS_MCP_ALLOW_WRITES=1 (also for simulate)."
     ),
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
 )
-def set_field(name: str, field: str, value: str) -> dict[str, Any]:
+def set_field(name: str, field: str, value: str, simulate: bool = False) -> dict[str, Any]:
     security.require_writes()
     if not isinstance(field, str) or not field:
         raise PassError("`field` must be a non-empty string", code="invalid_argument")
     _validate_body(value, allow_newlines=False)
     try:
         entry = _decrypt(name)  # also validates name + path
+        before_body = fields.serialize(entry)
         entry.set_field(field, value)
         body = fields.serialize(entry)
+        if simulate:
+            audit.log("set_field", name=name, field=field, simulated=True)
+            return {
+                "name": name,
+                "field": field,
+                "simulated": True,
+                "ok": True,
+                "fields_count": len(entry.fields),
+                "before": before_body,
+                "after": body,
+                "changed": before_body != body,
+                "sensitive": True,
+            }
         _insert_via_stdin(name, body, multiline=True, force=True)
         audit.log("set_field", name=name, field=field)
         return {"name": name, "field": field, "ok": True, "fields_count": len(entry.fields)}
@@ -335,17 +351,31 @@ def set_field(name: str, field: str, value: str) -> dict[str, Any]:
     description=(
         "Remove all lines matching `field` (case-insensitive) from an existing entry, "
         "preserving the password and all other lines. No-op if the field is absent. "
-        "Requires PASS_MCP_ALLOW_WRITES=1."
+        "Pass `simulate=true` for a dry-run. Requires PASS_MCP_ALLOW_WRITES=1."
     ),
     annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
 )
-def unset_field(name: str, field: str) -> dict[str, Any]:
+def unset_field(name: str, field: str, simulate: bool = False) -> dict[str, Any]:
     security.require_writes()
     if not isinstance(field, str) or not field:
         raise PassError("`field` must be a non-empty string", code="invalid_argument")
     try:
         entry = _decrypt(name)
+        before_body = fields.serialize(entry)
         removed = entry.unset_field(field)
+        if simulate:
+            after_body = fields.serialize(entry)
+            audit.log("unset_field", name=name, field=field, simulated=True, removed=removed)
+            return {
+                "name": name,
+                "field": field,
+                "simulated": True,
+                "removed": removed,
+                "before": before_body,
+                "after": after_body,
+                "changed": before_body != after_body,
+                "sensitive": True,
+            }
         if not removed:
             audit.log("unset_field", name=name, field=field, removed=False)
             return {"name": name, "field": field, "removed": False}
@@ -569,6 +599,89 @@ def cp(src: str, dst: str, force: bool = False) -> dict[str, Any]:
     return _move_or_copy("cp", src, dst, force=force)
 
 
+# ── grep (slow, opt-in) ──────────────────────────────────────────────────────
+
+
+_GREP_NAME_LINE = re.compile(r"^([^:][^\n]*):$")
+
+
+def _parse_grep_output(text: str) -> list[dict[str, str]]:
+    """Parse `pass grep` stdout into [{name, line}, ...].
+
+    pass-grep output has the structure:
+        <pass-name>:
+        <matched line>
+        [more matched lines...]
+        <next pass-name>:
+        ...
+    """
+    out: list[dict[str, str]] = []
+    current: str | None = None
+    for raw in text.splitlines():
+        if not raw:
+            continue
+        match = _GREP_NAME_LINE.match(raw)
+        if match and "/" not in raw[:1]:
+            # A header line ("<name>:") — names can contain slashes; the trailing
+            # `:` is the marker. False positives possible if a matched value ends
+            # in `:` and has no whitespace; pass-grep colorizes by default which
+            # makes parsing brittle, but with `--color=never` (set via env) the
+            # convention holds.
+            current = match.group(1)
+        elif current is not None:
+            out.append({"name": current, "line": raw})
+    return out
+
+
+@mcp.tool(
+    name="grep",
+    description=(
+        "Search inside the decrypted body of every entry for a regex pattern. "
+        "**Slow and expensive** — decrypts the entire store, warming many secret "
+        "keys in gpg-agent's cache. Caller must pass `confirm_decrypt_all=true` "
+        "to acknowledge. Returns matched lines (sensitive — they're decrypted "
+        "content). Honours PASS_MCP_GREP_TIMEOUT_SECONDS (default 120s)."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+    meta={"sensitive": True},
+)
+def grep(
+    pattern: str, confirm_decrypt_all: bool = False, case_insensitive: bool = False
+) -> dict[str, Any]:
+    if not isinstance(pattern, str) or not pattern:
+        raise PassError("`pattern` must be a non-empty string", code="invalid_argument")
+    if len(pattern) > 256:
+        raise PassError("`pattern` longer than 256 chars", code="invalid_argument")
+    if not confirm_decrypt_all:
+        raise PassError(
+            "grep decrypts every entry in the store. Pass confirm_decrypt_all=true "
+            "to acknowledge the cost (gpg-agent will cache secret keys for entries "
+            "you might not have intended to access).",
+            code="confirmation_required",
+        )
+    _require_agent_if_configured()
+    timeout = float(os.environ.get("PASS_MCP_GREP_TIMEOUT_SECONDS", "120"))
+    args: list[str] = ["grep"]
+    if case_insensitive:
+        args.append("-i")
+    args.append(pattern)
+    try:
+        # Force no color so our parser doesn't see ANSI escapes.
+        result = pass_cli.run_or_raise(args, timeout=timeout)
+        matches = _parse_grep_output(result.stdout)
+        audit.log("grep", pattern_len=len(pattern), match_count=len(matches))
+        return {
+            "matches": matches,
+            "count": len(matches),
+            "pattern": pattern,
+            "case_insensitive": case_insensitive,
+            "sensitive": True,
+        }
+    except PassError as exc:
+        audit.log("grep", ok=False, error=exc.code)
+        raise
+
+
 # ── git tools ────────────────────────────────────────────────────────────────
 
 
@@ -651,7 +764,39 @@ def git_push() -> dict[str, Any]:
         raise
 
 
+def _strict_startup_checks() -> None:
+    """Refuse to start under demonstrably-unsafe conditions.
+
+    Bypass with `PASS_MCP_ALLOW_UNSAFE=1` (do not). The bypass exists so an
+    operator can recover a misconfigured store via the MCP — not for steady-
+    state use. Architecture §6.7.
+    """
+    import sys
+
+    if security._env_flag("PASS_MCP_ALLOW_UNSAFE"):
+        return
+    store_dir = store.resolve_store_dir()
+    if store_dir.exists() and store._world_readable(store_dir):
+        sys.stderr.write(
+            f"unix-pass-mcp: refusing to start: store directory {store_dir} is "
+            f"world-accessible (mode bits o+rwx).\n"
+            f"  Fix: `chmod -R go-rwx {store_dir}`, or bypass with "
+            f"PASS_MCP_ALLOW_UNSAFE=1.\n"
+        )
+        sys.exit(2)
+    umask = os.environ.get("PASSWORD_STORE_UMASK", "077")
+    if not store._is_at_least_077(umask):
+        sys.stderr.write(
+            f"unix-pass-mcp: refusing to start: PASSWORD_STORE_UMASK={umask!r} "
+            f"is weaker than 077; new files would be readable by group/other.\n"
+            f"  Fix: `unset PASSWORD_STORE_UMASK` (defaults to 077), or bypass "
+            f"with PASS_MCP_ALLOW_UNSAFE=1.\n"
+        )
+        sys.exit(2)
+
+
 def main() -> None:
+    _strict_startup_checks()
     mcp.run("stdio")
 
 
