@@ -11,7 +11,13 @@ import fnmatch
 import os
 import re
 
-from .errors import DestructiveDisabled, InvalidPassName, PathNotAllowed, WritesDisabled
+from .errors import (
+    DestructiveDisabled,
+    InvalidPassName,
+    NetworkDisabled,
+    PathNotAllowed,
+    WritesDisabled,
+)
 
 _VALID_NAME = re.compile(r"^[A-Za-z0-9._@\-][A-Za-z0-9._@/\-]*$")
 _MAX_NAME_LEN = 256
@@ -86,6 +92,10 @@ def destructive_enabled() -> bool:
     return _env_flag("PASS_MCP_ALLOW_DESTRUCTIVE")
 
 
+def network_enabled() -> bool:
+    return _env_flag("PASS_MCP_ALLOW_NETWORK")
+
+
 def require_writes() -> None:
     if not writes_enabled():
         raise WritesDisabled(
@@ -99,4 +109,11 @@ def require_destructive() -> None:
     if not destructive_enabled():
         raise DestructiveDisabled(
             "destructive operations require PASS_MCP_ALLOW_DESTRUCTIVE=1",
+        )
+
+
+def require_network() -> None:
+    if not network_enabled():
+        raise NetworkDisabled(
+            "git network operations (pull/push) require PASS_MCP_ALLOW_NETWORK=1",
         )

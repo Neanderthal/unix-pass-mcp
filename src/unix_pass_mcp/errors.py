@@ -35,6 +35,14 @@ class DestructiveDisabled(PassError):
     code = "destructive_disabled"
 
 
+class NetworkDisabled(PassError):
+    code = "network_disabled"
+
+
+class NotAGitRepo(PassError):
+    code = "not_a_git_repo"
+
+
 class NotFound(PassError):
     code = "not_found"
 

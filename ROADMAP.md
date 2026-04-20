@@ -2,7 +2,7 @@
 
 Milestone-driven. Each milestone is independently shippable and adds capability without weakening defaults.
 
-**Status:** M0 ✅ · M1 ✅ · M2 ✅ · M4 ✅ · M3 next
+**Status:** M0 ✅ · M1 ✅ · M2 ✅ · M4 ✅ · M3 git ✅ · M3 destructive next
 
 ---
 
@@ -57,13 +57,28 @@ Bonus shipped this milestone:
 
 ---
 
-## M3 — Destructive ops & git (1–2 days)
+## M3a — Git tools ✅
 
-- [ ] `rm` (`--recursive`, always `--force`)
+- [x] `git_status` — porcelain v2 parsing → `{clean, branch, upstream, ahead, behind, dirty_files}`
+- [x] `git_log` — oneline parsing → `[{hash, subject}, …]`, limit 1–200
+- [x] `git_pull` — `--ff-only` (no merge commits, no rebase). Network-gated.
+- [x] `git_push` — no force. Network-gated.
+- [x] `git_remotes` — folded into `store_info` (read directly from `.git/config`, no subprocess)
+- [x] Network gate: `PASS_MCP_ALLOW_NETWORK=1`
+
+**Verified**: 288 unit tests + 38 integration tests (incl. push/pull against a local bare repo), all green.
+
+Deliberately omitted vs. original plan:
+- `git_diff` — `.gpg` files diff as binary; the file-list summary is in `git_status` already.
+- `git_fetch` — strict subset of `pull`; one tool is enough.
+- `git_remote -v` — `store_info.git_remotes` covers it.
+- All write-history operations (`config`, `reset`, `checkout`, `rebase`, `filter-branch`) — never useful via an LLM.
+
+## M3b — Destructive ops (next)
+
+- [ ] `rm` (`--recursive`, always `--force` since pass would prompt without TTY)
 - [ ] `init` / `reencrypt`
-- [ ] `git` tool with whitelisted subcommands (status, log, diff, pull, push, fetch, remote -v)
 - [ ] Destructive gate: `PASS_MCP_ALLOW_DESTRUCTIVE=1`
-- [ ] Optional network gate: `PASS_MCP_ALLOW_NETWORK=1` for push/pull/fetch
 
 **Done when**: an opted-in user can fully administer the store.
 

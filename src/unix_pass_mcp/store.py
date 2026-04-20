@@ -74,6 +74,7 @@ class StoreInfo:
     pinentry: PinentryInfo | None = None
     pass_version: str | None = None
     umask: str = "077"
+    git_remotes: list[dict[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -260,11 +261,19 @@ def collect() -> StoreInfo:
         warnings.append("no root .gpg-id found — store is uninitialized; run `pass init <gpg-id>`")
 
     signing_required, fingerprints = _signing_info(store_dir)
+    is_git = (store_dir / ".git").is_dir()
+    if is_git:
+        # Local import to avoid an import cycle (git_cmd imports store).
+        from . import git_cmd
+
+        git_remotes = git_cmd.remotes(store_dir)
+    else:
+        git_remotes = []
 
     return StoreInfo(
         store_dir=str(store_dir),
         exists=True,
-        is_git_repo=(store_dir / ".git").is_dir(),
+        is_git_repo=is_git,
         recipients_by_subdir=recipients,
         signing_required=signing_required,
         signing_key_fingerprints=fingerprints,
@@ -272,6 +281,7 @@ def collect() -> StoreInfo:
         pinentry=pinentry,
         pass_version=pass_cli.pass_version(),
         umask=umask,
+        git_remotes=git_remotes,
         warnings=warnings,
     )
 

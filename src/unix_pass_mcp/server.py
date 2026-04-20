@@ -21,7 +21,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from . import agent, audit, fields, otp, pass_cli, security, store
+from . import agent, audit, fields, git_cmd, otp, pass_cli, security, store
 from .errors import AgentUnavailable, AlreadyExists, NotFound, PassError
 
 mcp = FastMCP(
@@ -567,6 +567,88 @@ def mv(src: str, dst: str, force: bool = False) -> dict[str, Any]:
 )
 def cp(src: str, dst: str, force: bool = False) -> dict[str, Any]:
     return _move_or_copy("cp", src, dst, force=force)
+
+
+# ── git tools ────────────────────────────────────────────────────────────────
+
+
+@mcp.tool(
+    name="git_status",
+    description=(
+        "Inspect git state of the password store. Returns whether the working "
+        "tree is clean, current branch, upstream, ahead/behind counts, and any "
+        "dirty paths. Refuses if the store is not a git repository (run "
+        "`pass git init` first)."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+def git_status() -> dict[str, Any]:
+    try:
+        info = git_cmd.status()
+        audit.log("git_status", clean=info.clean, ahead=info.ahead, behind=info.behind)
+        return asdict(info)
+    except PassError as exc:
+        audit.log("git_status", ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="git_log",
+    description=(
+        "Return recent commits in the password store as `[{hash, subject}, ...]`. "
+        "`limit` defaults to 20 (max 200). Useful for auditing what changed and when."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+)
+def git_log(limit: int = 20) -> dict[str, Any]:
+    try:
+        commits = git_cmd.log(limit=limit)
+        audit.log("git_log", count=len(commits))
+        return {"commits": commits, "count": len(commits)}
+    except PassError as exc:
+        audit.log("git_log", ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="git_pull",
+    description=(
+        "Sync remote commits into the local store via `git pull --ff-only` (no merge "
+        "commits, no rebase — refuses if local has diverged). Requires "
+        "PASS_MCP_ALLOW_NETWORK=1 because it reaches out to a remote. Returns "
+        "`{ok, output, stderr}`. On failure the agent should call `git_status` to "
+        "diagnose."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
+)
+def git_pull() -> dict[str, Any]:
+    security.require_network()
+    try:
+        result = git_cmd.pull()
+        audit.log("git_pull", ok=result.ok)
+        return asdict(result)
+    except PassError as exc:
+        audit.log("git_pull", ok=False, error=exc.code)
+        raise
+
+
+@mcp.tool(
+    name="git_push",
+    description=(
+        "Push local commits to the configured upstream. Requires "
+        "PASS_MCP_ALLOW_NETWORK=1. Returns `{ok, output, stderr}`. Does not force-push."
+    ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+)
+def git_push() -> dict[str, Any]:
+    security.require_network()
+    try:
+        result = git_cmd.push()
+        audit.log("git_push", ok=result.ok)
+        return asdict(result)
+    except PassError as exc:
+        audit.log("git_push", ok=False, error=exc.code)
+        raise
 
 
 def main() -> None:

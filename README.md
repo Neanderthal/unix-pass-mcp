@@ -2,7 +2,7 @@
 
 MCP server that exposes the [Unix `pass`](https://www.passwordstore.org/) password manager to MCP clients (Claude Code, Claude Desktop, any other host).
 
-> **Status:** M2 + M4 — read, safe-write, and TOTP/OTP surfaces complete. 256 unit tests + 31 real-GPG integration tests, all green. Destructive ops (M3) on the [roadmap](./ROADMAP.md).
+> **Status:** M2 + M3a + M4 — read, safe-write, TOTP/OTP, and git surfaces complete. 288 unit tests + 38 real-GPG integration tests, all green. Destructive ops (M3b) on the [roadmap](./ROADMAP.md).
 
 ## Why
 
@@ -131,9 +131,20 @@ claude mcp add pass -- uv run --directory /absolute/path/to/unix-pass-mcp unix-p
 | `cp` | Copy an entry/subfolder, with the same re-encryption semantics. |
 | `otp_set` | Append or replace the `otpauth://` URI on an existing entry. Validates the URI before writing. |
 
+### Git tools
+
+`git_status` and `git_log` are always available; `git_pull` and `git_push` need `PASS_MCP_ALLOW_NETWORK=1`.
+
+| Tool | Description |
+|---|---|
+| `git_status` | Structured status: `{clean, branch, upstream, ahead, behind, dirty_files}`. Refuses if the store isn't a git repo. |
+| `git_log` | Recent commits as `[{hash, subject}, …]`. `limit` defaults to 20 (max 200). |
+| `git_pull` | `git pull --ff-only` (no merge commits, no rebase). |
+| `git_push` | `git push` (never force). |
+
 ### Coming next
 
-- **M3 (destructive + git):** `rm`, `init`, `reencrypt`, `git` — gated behind `PASS_MCP_ALLOW_DESTRUCTIVE=1`
+- **M3b (destructive ops):** `rm`, `init`, `reencrypt` — gated behind `PASS_MCP_ALLOW_DESTRUCTIVE=1`
 
 ## Configuration
 
@@ -142,7 +153,8 @@ Server-specific env vars:
 | Var | Default | Effect |
 |---|---|---|
 | `PASS_MCP_ALLOW_WRITES` | unset | Required for any mutating tool (M2+) |
-| `PASS_MCP_ALLOW_DESTRUCTIVE` | unset | Required for `rm`/`init`/`reencrypt` (M3+) |
+| `PASS_MCP_ALLOW_DESTRUCTIVE` | unset | Required for `rm`/`init`/`reencrypt` (M3b+) |
+| `PASS_MCP_ALLOW_NETWORK` | unset | Required for `git_pull`/`git_push` |
 | `PASS_MCP_ALLOWED_PATHS` | unset (= all) | Comma-separated fnmatch globs scoping which entries the server may touch |
 | `PASS_MCP_REQUIRE_AGENT` | `1` | Refuse to decrypt if `gpg-agent` is not reachable |
 | `PASS_MCP_AUDIT_LOG` | `~/.local/state/unix-pass-mcp/audit.log` | Append-only JSONL log of actions; set to empty string to disable |
