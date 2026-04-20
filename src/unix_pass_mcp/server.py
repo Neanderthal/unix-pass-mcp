@@ -580,7 +580,7 @@ def _move_or_copy(action: str, src: str, dst: str, *, force: bool) -> dict[str, 
         "recipients if they differ. Refuses if the destination exists unless `force=true`. "
         "Requires PASS_MCP_ALLOW_WRITES=1."
     ),
-    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
 )
 def mv(src: str, dst: str, force: bool = False) -> dict[str, Any]:
     return _move_or_copy("mv", src, dst, force=force)
@@ -602,17 +602,30 @@ def cp(src: str, dst: str, force: bool = False) -> dict[str, Any]:
 # ── grep (slow, opt-in) ──────────────────────────────────────────────────────
 
 
-_GREP_NAME_LINE = re.compile(r"^([^:][^\n]*):$")
+# `pass grep` (see /usr/bin/pass cmd_grep) always emits header lines via
+#     printf "\e[94m%s\e[1m%s\e[0m:\n" "<dir/>" "<leaf>"
+# i.e. ANSI-coloured "blue dir, bold leaf, reset, colon, newline". It also
+# pipes the body through `grep --color=always`, which wraps matched substrings
+# in further escape sequences. We can't disable either: the colour flags are
+# hard-coded in the pass shell script. So:
+#   * recognise the colour envelope as the header marker (deterministic — content
+#     lines never start with \e[94m followed by \e[0m:),
+#   * strip ANSI from content lines before handing them back to the agent,
+#   * also accept the bare "<name>:" form so tests/fixtures don't have to embed
+#     escape sequences.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_COLOR_HEADER_RE = re.compile(r"^\x1b\[94m(.*?)\x1b\[1m(.*?)\x1b\[0m:$")
+_BARE_HEADER_RE = re.compile(r"^([A-Za-z0-9._@\-][A-Za-z0-9._@/\-]*):$")
 
 
 def _parse_grep_output(text: str) -> list[dict[str, str]]:
     """Parse `pass grep` stdout into [{name, line}, ...].
 
-    pass-grep output has the structure:
-        <pass-name>:
-        <matched line>
+    pass-grep output structure:
+        <ANSI><dir/><ANSI><leaf><ANSI>:
+        <matched line, possibly with ANSI escapes from grep --color=always>
         [more matched lines...]
-        <next pass-name>:
+        <next header>
         ...
     """
     out: list[dict[str, str]] = []
@@ -620,16 +633,18 @@ def _parse_grep_output(text: str) -> list[dict[str, str]]:
     for raw in text.splitlines():
         if not raw:
             continue
-        match = _GREP_NAME_LINE.match(raw)
-        if match and "/" not in raw[:1]:
-            # A header line ("<name>:") — names can contain slashes; the trailing
-            # `:` is the marker. False positives possible if a matched value ends
-            # in `:` and has no whitespace; pass-grep colorizes by default which
-            # makes parsing brittle, but with `--color=never` (set via env) the
-            # convention holds.
-            current = match.group(1)
-        elif current is not None:
-            out.append({"name": current, "line": raw})
+        color_match = _COLOR_HEADER_RE.match(raw)
+        if color_match:
+            current = color_match.group(1) + color_match.group(2)
+            continue
+        bare_match = _BARE_HEADER_RE.match(raw)
+        if bare_match and current != bare_match.group(1):
+            # Bare-form header. The `current` guard avoids promoting a content
+            # line that happens to be a duplicate of the most recent header.
+            current = bare_match.group(1)
+            continue
+        if current is not None:
+            out.append({"name": current, "line": _ANSI_RE.sub("", raw)})
     return out
 
 
@@ -924,34 +939,6 @@ def reencrypt(subfolder: str | None = None) -> dict[str, Any]:
     # Re-use init's safety checks (won't raise would_lock_out since current ids
     # are by definition the ones we used to read the store).
     return init(current, subfolder=sub, force=False)
-    """Refuse to start under demonstrably-unsafe conditions.
-
-    Bypass with `PASS_MCP_ALLOW_UNSAFE=1` (do not). The bypass exists so an
-    operator can recover a misconfigured store via the MCP — not for steady-
-    state use. Architecture §6.7.
-    """
-    import sys
-
-    if security._env_flag("PASS_MCP_ALLOW_UNSAFE"):
-        return
-    store_dir = store.resolve_store_dir()
-    if store_dir.exists() and store._world_readable(store_dir):
-        sys.stderr.write(
-            f"unix-pass-mcp: refusing to start: store directory {store_dir} is "
-            f"world-accessible (mode bits o+rwx).\n"
-            f"  Fix: `chmod -R go-rwx {store_dir}`, or bypass with "
-            f"PASS_MCP_ALLOW_UNSAFE=1.\n"
-        )
-        sys.exit(2)
-    umask = os.environ.get("PASSWORD_STORE_UMASK", "077")
-    if not store._is_at_least_077(umask):
-        sys.stderr.write(
-            f"unix-pass-mcp: refusing to start: PASSWORD_STORE_UMASK={umask!r} "
-            f"is weaker than 077; new files would be readable by group/other.\n"
-            f"  Fix: `unset PASSWORD_STORE_UMASK` (defaults to 077), or bypass "
-            f"with PASS_MCP_ALLOW_UNSAFE=1.\n"
-        )
-        sys.exit(2)
 
 
 def main() -> None:

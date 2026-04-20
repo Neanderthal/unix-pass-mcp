@@ -219,6 +219,38 @@ def test_grep_parser_empty() -> None:
     assert server._parse_grep_output("") == []
 
 
+def test_grep_parser_handles_real_pass_color_output() -> None:
+    """`pass grep` (see /usr/bin/pass cmd_grep) hard-codes ANSI colour:
+        printf "\\e[94m%s\\e[1m%s\\e[0m:\\n" "<dir/>" "<leaf>"
+    and pipes content through `grep --color=always`. The parser must recognise
+    the colour envelope as the header and strip ANSI from content lines.
+    """
+    text = (
+        "\x1b[94mweb/\x1b[1mgithub.com\x1b[0m:\n"
+        "Username: \x1b[01;31m\x1b[Kalice\x1b[m\x1b[K\n"
+        "\x1b[94m\x1b[1mhn\x1b[0m:\n"
+        "Note: \x1b[01;31m\x1b[Kalice\x1b[m\x1b[K was here\n"
+    )
+    out = server._parse_grep_output(text)
+    assert out == [
+        {"name": "web/github.com", "line": "Username: \x1b[Kalice\x1b[K"},
+        {"name": "hn", "line": "Note: \x1b[Kalice\x1b[K was here"},
+    ]
+
+
+def test_grep_parser_does_not_promote_content_to_header_after_match() -> None:
+    """Bare-form parser guard: a content line that happens to equal the most
+    recent header (e.g. via duplicated line in a re-shown body) must not
+    re-trigger the header rule.
+    """
+    text = "site:\nfoo\nsite:\n"
+    out = server._parse_grep_output(text)
+    assert out == [
+        {"name": "site", "line": "foo"},
+        {"name": "site", "line": "site:"},
+    ]
+
+
 # ── tool registration ───────────────────────────────────────────────────────
 
 

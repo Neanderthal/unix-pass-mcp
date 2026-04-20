@@ -54,7 +54,6 @@ All tools are async (FastMCP handles transport). Sensitive return values carry `
 |---|---|---|---|
 | `store_info` | – | `{store_dir, recipients_by_subdir, gpg_agent_status, signing_required}` | Health/preflight |
 | `list` | `subfolder?` | `[pass-name, ...]` flat | Walks tree, strips `.gpg` |
-| `tree` | `subfolder?` | string (tree art from `pass ls`) | UI-friendly |
 | `find` | `query` | `[pass-name, ...]` | Wraps `pass find` |
 | `show` | `name`, `line=1` | `{value, sensitive: true}` | Default returns line 1 = password |
 | `show_field` | `name`, `field` | `{value}` or `{value: null}` | Parses `Key: value`, case-insensitive key |
