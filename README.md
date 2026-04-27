@@ -164,8 +164,17 @@ Add to `~/.config/Claude/claude_desktop_config.json` (or the platform equivalent
 ### Claude Code
 
 ```bash
+# Read-only
 claude mcp add pass -- uv run --directory /absolute/path/to/unix-pass-mcp unix-pass-mcp
+
+# With writes enabled and path scope (recommended pairing)
+claude mcp add pass -s user \
+  -e PASS_MCP_ALLOW_WRITES=1 \
+  -e PASS_MCP_ALLOWED_PATHS='web/*' \
+  -- uv run --directory /absolute/path/to/unix-pass-mcp unix-pass-mcp
 ```
+
+Each `-e KEY=VALUE` flag sets one env var on the spawned server. To change env on an existing server, `claude mcp remove pass -s user` then re-add — the CLI has no in-place edit. Verify with `claude mcp get pass`.
 
 ### Driving an autonomous agent
 
@@ -187,7 +196,7 @@ For account creation / profile filling workflows that combine `unix-pass-mcp` wi
 | `show` | Decrypt and return one line of an entry (default = line 1 = password). Marked sensitive. |
 | `show_field` | Decrypt and return one named metadata field (`URL`, `Username`, `otpauth`, …). Case-insensitive. |
 | `show_metadata` | Decrypt and return only the entry shape (which fields exist, their values, line count). Password value is never returned. |
-| `unlock_agent` | Pop a desktop password dialog (zenity/kdialog) and warm gpg-agent's cache via loopback pinentry. Optional `target` for multi-recipient stores. The LLM never sees the passphrase. |
+| `unlock_agent` | Pop a desktop password dialog (zenity/kdialog) and warm gpg-agent's cache via loopback pinentry. Optional `target` for multi-recipient stores — pass an explicit pass-name if a no-arg call returns `wrong_passphrase_or_decrypt_failed`, which can happen on legacy stores where the smallest entry is encrypted to a rotated subkey. The LLM never sees the passphrase. |
 | `grep` | Search inside the decrypted body of every entry. Slow + costly (decrypts whole store) — requires `confirm_decrypt_all=true`. Marked sensitive. Honours `PASS_MCP_ALLOWED_PATHS`. |
 | `otp` | Compute the current TOTP code from an entry's `otpauth://` line. Returns code + `seconds_remaining`. Marked sensitive. Native RFC 6238 — no `pass-otp` runtime dependency. |
 | `otp_uri` | Return the raw `otpauth://` URI (contains the secret). Use only when re-enrolling the same secret elsewhere. |
